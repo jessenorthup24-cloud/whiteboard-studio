@@ -42,7 +42,17 @@
     {name:'Places',file:'biblical-places.png',cols:4,rows:3,items:['Stone house','Nomad tent','City gate','Village well','Watchtower','Synagogue','Temple','Stable','Courtyard','Stone bridge','Vineyard','Desert oasis']},
     {name:'Travel',file:'biblical-travel.png',cols:4,rows:3,items:['Sandals','Walking staff','Travel cloak','Satchel','Wooden cart','Fishing boat','Fishing net','Oar','Donkey saddle','Wagon wheel','Lantern','Rope coil']},
     {name:'Sacred objects',file:'biblical-sacred.png',cols:4,rows:3,items:['Scroll','Stone tablets','Menorah','Altar','Incense burner','Ark chest','Shofar','Harp','Crown','Star','Dove with olive branch','Shepherd crook']},
-    {name:'Stories',file:'biblical-stories.png',cols:4,rows:3,items:['Empty tomb','Manger','Mustard plant','Burning bush','Rainbow','Ladder','Loaves and fish','Water jar','Sling','Sling stones','Olive press','Winepress']}
+    {name:'Stories',file:'biblical-stories.png',cols:4,rows:3,items:['Empty tomb','Manger','Mustard plant','Burning bush','Rainbow','Ladder','Loaves and fish','Water jar','Sling','Sling stones','Olive press','Winepress']},
+    {name:'Men: emotions',file:'everyday-men-emotions.png',cols:5,rows:2,items:['Happy man','Sad man','Angry man','Surprised man','Confused man','Excited man','Worried man','Thoughtful man','Tired man','Confident man']},
+    {name:'Women: emotions',file:'everyday-women-emotions.png',cols:5,rows:2,items:['Happy woman','Sad woman','Angry woman','Surprised woman','Confused woman','Excited woman','Worried woman','Thoughtful woman','Tired woman','Confident woman']},
+    {name:'Gestures',file:'everyday-gestures.png',cols:5,rows:2,items:['Waving hand','Handshake','Thumbs up','Thumbs down','High five','Pointing right','Clapping hands','Praying hands','Helping hands','Fist bump']},
+    {name:'Work and study',file:'everyday-work-study.png',cols:5,rows:2,items:['Presentation chart','Magnifying glass','Clipboard','Calendar','Clock','Light bulb','Trophy','Target','Puzzle piece','Books']},
+    {name:'Communication',file:'everyday-communication.png',cols:5,rows:2,items:['Email envelope','Smartphone','Speech bubble','Question bubble','Video camera','Microphone','Headphones','Megaphone','Chat bubbles','Notification bell']},
+    {name:'Home and daily life',file:'everyday-home-life.png',cols:5,rows:2,items:['Key','Front door','Houseplant','Coffee cup','Shopping bag','Umbrella','Gift box','Birthday cake','Dinner plate','Toolbox']},
+    {name:'Wellness',file:'everyday-wellness.png',cols:5,rows:2,items:['Heart pulse','First aid kit','Water bottle','Running shoe','Dumbbell','Yoga mat','Bicycle helmet','Sleep moon','Sunglasses sun','Bandage']},
+    {name:'Nature and weather',file:'everyday-nature-weather.png',cols:5,rows:2,items:['Smiling sun','Rain cloud','Snowflake','Rainbow','Wind','Mountain','Ocean wave','Leaf','Campfire','Seedling']},
+    {name:'Arrows',kind:'symbol',symbolType:'arrow',cols:5,rows:2,items:['Right arrow','Left arrow','Up arrow','Down arrow','Up-right arrow','Curved right arrow','Curved left arrow','U-turn arrow','Circular arrows','Double-headed arrow']},
+    {name:'Numbers',kind:'symbol',symbolType:'number',cols:5,rows:2,items:['Number 0','Number 1','Number 2','Number 3','Number 4','Number 5','Number 6','Number 7','Number 8','Number 9']}
   ];
   const HAND = {src:'./assets/marker-hand-v3.png',x:138,y:16,w:650,h:433};
   const sheetCache=new Map(),cropCache=new Map();
@@ -140,9 +150,9 @@
     else for(let y=3;y<=99;y+=6)paths.push({d:`M0 ${y} L100 ${y}`,sw:7.4});
     return paths;
   }
-  function maskedDrawing(it,body,progress,withHand){
+  function maskedDrawing(it,body,progress,withHand,letterPaths){
     if(progress>=1)return body;
-    const raw=it.type==='shape'?shapeTracePaths(it):imageTracePaths(it),sx=it.w/100,sy=it.h/100;
+    const raw=letterPaths|| (it.type==='shape'?shapeTracePaths(it):imageTracePaths(it)),sx=letterPaths?1:it.w/100,sy=letterPaths?1:it.h/100;
     const paths=raw.map(p=>({...p,tx:it.x,ty:it.y,sx,sy,stroke:'#fff'}));
     const drawn=sequenceMarkup(paths,progress,withHand),maskId=`mask-${it.id.replace(/[^a-zA-Z0-9]/g,'')}`;
     return `<defs><mask id="${maskId}" maskUnits="userSpaceOnUse" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}"><rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" fill="black"/>${drawn.markup}</mask></defs><g mask="url(#${maskId})">${body}</g>${drawn.hand}`;
@@ -156,9 +166,9 @@
       const transform=it.animation==='slide'?`translate(${(1-progress)*-150} 0)`:it.animation==='pop'?`translate(${it.x+it.w/2} ${it.y+it.h/2}) scale(${.5+.5*progress}) translate(${-it.x-it.w/2} ${-it.y-it.h/2})`:'';
       return `<g ${attr} opacity="${opacity}" transform="${transform}">${full}</g>`;
     }
-    if(it.type==='text'&&HANDWRITING_FONTS[it.font]&&it.handwritingSrc&&it.handwritingSignature===textSignature(it)){
+    if(it.type==='text'&&HANDWRITING_FONTS[it.font]&&it.handwritingSrc&&it.letterPaths?.length&&it.handwritingSignature===textSignature(it)){
       const body=`<image href="${esc(it.handwritingSrc)}" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" preserveAspectRatio="none"/>`;
-      return start+maskedDrawing(it,body,progress,hand&&progress<1)+hit+end;
+      return start+maskedDrawing(it,body,progress,hand&&progress<1,it.letterPaths)+hit+end;
     }
     if(it.type==='icon'||it.type==='vector'||it.type==='text'){
       const drawn=sequenceMarkup(it.type==='text'?textPaths(it):vectorPaths(it),progress,hand&&progress<1);
@@ -249,7 +259,7 @@
       }
       html+=`<div class="panel-divider"></div><div class="field-row">${field('Duration (sec)','duration',it.duration,'number','min="0.1" max="60" step="0.1"')}${field('Pause (sec)','pause',it.pause,'number','min="0" max="60" step="0.1"')}</div><div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-action="duplicate">Duplicate</button><button class="panel-action" data-action="back">Move earlier</button><button class="panel-action" data-action="forward">Move later</button><button class="panel-action danger" data-action="delete">Delete</button></div>`;
     }else if(state.tool==='icon'){
-      html=`<div class="panel-eyebrow">LIBRARY</div><h2 class="panel-title">Drawings</h2><p class="panel-help">Choose an illustration to add it to the canvas.</p><div class="preset-grid">${iconKeys.map(k=>`<button class="preset" data-icon="${k}" title="${ICONS[k].name}">${({bulb:'♧',chart:'↗',heart:'♡',star:'☆',person:'♙',cloud:'☁',rocket:'♢',check:'✓',pencil:'✎'})[k]}</button>`).join('')}</div><div class="panel-divider"></div><div class="field"><label for="librarySearch">Find an illustration</label><input id="librarySearch" type="search" placeholder="Search all 160 drawings"></div>${SHEETS.map((sheet,si)=>`${si===0?'<div class="panel-eyebrow">BLACK LINE ART</div>':si===10?'<div class="panel-divider"></div><div class="panel-eyebrow">BIBLE ERA COLOR ART</div>':''}<section class="sheet-section"><h3 class="sheet-title">${sheet.name}</h3><div class="sheet-grid">${sheet.items.map((name,ii)=>{const cols=sheet.cols||2,rows=sheet.rows||2;return `<button class="sheet-item" data-sheet="${si}" data-sheet-item="${ii}" title="Add ${esc(name)}"><span class="sheet-thumb" style="background-image:url('./assets/sheets/${sheet.file}');background-size:${cols*100}% ${rows*100}%;background-position:${(ii%cols)/(cols-1)*100}% ${Math.floor(ii/cols)/(rows-1)*100}%"></span><span>${esc(name)}</span></button>`;}).join('')}</div></section>`).join('')}<div class="panel-divider"></div><div class="note-card">All artwork has a transparent background and is added one drawing at a time.</div>`;
+      html=`<div class="panel-eyebrow">LIBRARY</div><h2 class="panel-title">Drawings</h2><p class="panel-help">Choose an illustration to add it to the canvas.</p><div class="preset-grid">${iconKeys.map(k=>`<button class="preset" data-icon="${k}" title="${ICONS[k].name}">${({bulb:'♧',chart:'↗',heart:'♡',star:'☆',person:'♙',cloud:'☁',rocket:'♢',check:'✓',pencil:'✎'})[k]}</button>`).join('')}</div><div class="panel-divider"></div><div class="field"><label for="librarySearch">Find an illustration</label><input id="librarySearch" type="search" placeholder="Search all 260 drawings"></div>${SHEETS.map((sheet,si)=>`${si===0?'<div class="panel-eyebrow">BLACK LINE ART</div>':si===10?'<div class="panel-divider"></div><div class="panel-eyebrow">BIBLE ERA COLOR ART</div>':si===20?'<div class="panel-divider"></div><div class="panel-eyebrow">EVERYDAY COLOR ART</div>':si===28?'<div class="panel-divider"></div><div class="panel-eyebrow">ARROWS & NUMBERS</div>':''}<section class="sheet-section"><h3 class="sheet-title">${sheet.name}</h3><div class="sheet-grid">${sheet.items.map((name,ii)=>{const cols=sheet.cols||2,rows=sheet.rows||2,preview=sheet.file?`background-image:url('./assets/sheets/${sheet.file}');background-size:${cols*100}% ${rows*100}%;background-position:${(ii%cols)/(cols-1)*100}% ${Math.floor(ii/cols)/(rows-1)*100}%`:'';return `<button class="sheet-item" data-sheet="${si}" data-sheet-item="${ii}" title="Add ${esc(name)}"><span class="sheet-thumb" style="${preview}"></span><span>${esc(name)}</span></button>`;}).join('')}</div></section>`).join('')}<div class="panel-divider"></div><div class="note-card">All artwork has a transparent background and is added one drawing at a time.</div>`;
     }else if(state.tool==='shape'){
       html=`<div class="panel-eyebrow">ELEMENTS</div><h2 class="panel-title">Shapes</h2><p class="panel-help">Simple shapes help frame your message.</p><div class="preset-grid"><button class="preset" data-shape="round">▢</button><button class="preset" data-shape="rect">□</button><button class="preset" data-shape="circle">○</button></div>`;
     }else if(state.tool==='audio'){
@@ -349,9 +359,43 @@
     })().catch(e=>{sheetCache.delete(sheetIndex);throw e;});
     sheetCache.set(sheetIndex,pending);return pending;
   }
+  function generateSymbolDrawing(type,index){
+    const canvas=document.createElement('canvas');canvas.width=512;canvas.height=512;
+    const ctx=canvas.getContext('2d'),colors=['#ef7358','#4b9ec4','#e6ac3d','#7aaf73','#9b80c8','#e78baa','#65ada3','#d59554','#748bc5','#d87968'];
+    const color=colors[index],ink='#263949';ctx.lineJoin='round';ctx.lineCap='round';
+    if(type==='number'){
+      ctx.font='900 350px system-ui, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.lineWidth=22;ctx.strokeStyle=ink;ctx.strokeText(String(index),256,270);
+      ctx.fillStyle=color;ctx.fillText(String(index),256,270);
+    }else{
+      ctx.translate(256,256);
+      const fillPath=(path)=>{ctx.fillStyle=color;ctx.strokeStyle=ink;ctx.lineWidth=15;ctx.stroke(path);ctx.fill(path);};
+      const head=(x,y,angle)=>{ctx.save();ctx.translate(x,y);ctx.rotate(angle);const p=new Path2D();p.moveTo(0,0);p.lineTo(-85,-61);p.lineTo(-85,61);p.closePath();fillPath(p);ctx.restore();};
+      if(index<=4||index===9){
+        if(index!==9)ctx.rotate([0,Math.PI,-Math.PI/2,Math.PI/2,-Math.PI/4][index]);
+        const p=new Path2D();
+        if(index===9){p.moveTo(-195,0);p.lineTo(-80,-88);p.lineTo(-80,-39);p.lineTo(80,-39);p.lineTo(80,-88);p.lineTo(195,0);p.lineTo(80,88);p.lineTo(80,39);p.lineTo(-80,39);p.lineTo(-80,88);}
+        else{p.moveTo(-190,-39);p.lineTo(75,-39);p.lineTo(75,-87);p.lineTo(195,0);p.lineTo(75,87);p.lineTo(75,39);p.lineTo(-190,39);}
+        p.closePath();fillPath(p);
+      }else if(index===5||index===6){
+        if(index===6)ctx.scale(-1,1);
+        const p=new Path2D();p.moveTo(-165,145);p.bezierCurveTo(-168,-50,-38,-130,112,-112);
+        ctx.strokeStyle=ink;ctx.lineWidth=78;ctx.stroke(p);ctx.strokeStyle=color;ctx.lineWidth=59;ctx.stroke(p);head(190,-90,.2);
+      }else if(index===7){
+        const p=new Path2D();p.moveTo(170,145);p.lineTo(170,-30);p.bezierCurveTo(170,-172,-117,-172,-117,-30);p.lineTo(-117,88);
+        ctx.strokeStyle=ink;ctx.lineWidth=78;ctx.stroke(p);ctx.strokeStyle=color;ctx.lineWidth=59;ctx.stroke(p);head(-117,183,Math.PI/2);
+      }else if(index===8){
+        const first=new Path2D();first.arc(0,0,132,-2.35,.38);
+        const second=new Path2D();second.arc(0,0,132,.78,3.53);
+        for(const p of [first,second]){ctx.strokeStyle=ink;ctx.lineWidth=65;ctx.stroke(p);ctx.strokeStyle=color;ctx.lineWidth=47;ctx.stroke(p);}
+        head(124,49,1.95);head(-122,-50,-1.2);
+      }
+    }
+    return {src:canvas.toDataURL('image/png'),width:512,height:512};
+  }
   async function cropSheetDrawing(sheetIndex,drawingIndex){
     const key=`${sheetIndex}:${drawingIndex}`;if(cropCache.has(key))return cropCache.get(key);
-    const pending=(async()=>{const data=await sheetData(sheetIndex);if(data.drawings)return data.drawings[drawingIndex];const {image,cells}=data,[x,y,w,h]=cells[drawingIndex],canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(image,x,y,w,h,0,0,w,h);return {src:canvas.toDataURL('image/png'),width:w,height:h};})().catch(e=>{cropCache.delete(key);throw e;});
+    const pending=(async()=>{const sheet=SHEETS[sheetIndex];if(sheet.kind==='symbol')return generateSymbolDrawing(sheet.symbolType,drawingIndex);const data=await sheetData(sheetIndex);if(data.drawings)return data.drawings[drawingIndex];const {image,cells}=data,[x,y,w,h]=cells[drawingIndex],canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(image,x,y,w,h,0,0,w,h);return {src:canvas.toDataURL('image/png'),width:w,height:h};})().catch(e=>{cropCache.delete(key);throw e;});
     cropCache.set(key,pending);return pending;
   }
   function hydrateSheetThumbnails(){
@@ -371,11 +415,59 @@
     const sheet=SHEETS[sheetIndex],name=sheet?.items[drawingIndex];if(!name)return;
     try{
       const art=await cropSheetDrawing(sheetIndex,drawingIndex),trace=await traceImage(art.src);
-      let w=sheet.cols?330:420,h=w*art.height/art.width;if(h>470){w*=470/h;h=470;}
+      let w=sheet.kind==='symbol'?250:sheet.cols?330:420,h=w*art.height/art.width;if(h>470){w*=470/h;h=470;}
       addItem({...baseItem('image'),label:name,src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,sheetRef:[sheetIndex,drawingIndex],cropVersion:2,w,h,duration:2.2});toast(`${name} added to the canvas.`);
     }catch(e){console.error(e);toast('Could not add that illustration.');}
   }
-  function textSignature(it){return JSON.stringify([it.text,it.font,it.fontSize,it.color,it.w,it.h]);}
+  const glyphTraceCache=new Map();
+  function traceGlyphStrokes(character,family,size){
+    const key=`${family}:${size}:${character}`;if(glyphTraceCache.has(key))return glyphTraceCache.get(key);
+    const pad=8,canvas=document.createElement('canvas'),ctx=canvas.getContext('2d',{willReadFrequently:true});
+    ctx.font=`${size}px "${family}"`;const advance=ctx.measureText(character).width;
+    canvas.width=Math.ceil(advance+pad*3+size*.25);canvas.height=Math.ceil(size*1.55+pad*2);
+    ctx.font=`${size}px "${family}"`;ctx.textBaseline='top';ctx.fillStyle='#000';ctx.fillText(character,pad,pad);
+    const {width,height}=canvas,pixels=ctx.getImageData(0,0,width,height).data,bits=new Uint8Array(width*height);let area=0;
+    for(let i=0;i<bits.length;i++)if(pixels[i*4+3]>90){bits[i]=1;area++;}
+    const neighbors=(i)=>[i-width,i-width+1,i+1,i+width+1,i+width,i+width-1,i-1,i-width-1];
+    for(let iteration=0;iteration<36;iteration++){
+      let changed=false;
+      for(let pass=0;pass<2;pass++){
+        const remove=[];
+        for(let y=1;y<height-1;y++)for(let x=1;x<width-1;x++){
+          const i=y*width+x;if(!bits[i])continue;const n=neighbors(i).map(j=>bits[j]),count=n.reduce((a,b)=>a+b,0);
+          if(count<2||count>6)continue;
+          let transitions=0;for(let k=0;k<8;k++)if(!n[k]&&n[(k+1)%8])transitions++;
+          if(transitions!==1)continue;
+          if(pass===0?(n[0]*n[2]*n[4]||n[2]*n[4]*n[6]):(n[0]*n[2]*n[6]||n[0]*n[4]*n[6]))continue;
+          remove.push(i);
+        }
+        for(const i of remove)bits[i]=0;if(remove.length)changed=true;
+      }
+      if(!changed)break;
+    }
+    const points=[];for(let i=0;i<bits.length;i++)if(bits[i])points.push(i);
+    const adjacent=(i)=>neighbors(i).filter(j=>bits[j]);
+    const edgeKey=(a,b)=>a<b?`${a}:${b}`:`${b}:${a}`,seen=new Set(),chains=[];
+    const walk=(a,b)=>{const chain=[a,b];seen.add(edgeKey(a,b));let prev=a,cur=b;
+      for(let step=0;step<width*height;step++){
+        const next=adjacent(cur).find(j=>j!==prev&&!seen.has(edgeKey(cur,j)));
+        if(next==null)break;seen.add(edgeKey(cur,next));chain.push(next);prev=cur;cur=next;
+        if(adjacent(cur).length!==2||cur===a)break;
+      }
+      chains.push(chain);
+    };
+    for(const i of points)if(adjacent(i).length!==2)for(const j of adjacent(i))if(!seen.has(edgeKey(i,j)))walk(i,j);
+    for(const i of points)for(const j of adjacent(i))if(!seen.has(edgeKey(i,j)))walk(i,j);
+    if(!chains.length&&points.length)chains.push([points[0],points[0]]);
+    let length=0;for(const chain of chains)for(let k=1;k<chain.length;k++){const a=chain[k-1],b=chain[k];length+=Math.hypot(a%width-b%width,Math.floor(a/width)-Math.floor(b/width));}
+    const stroke=clamp(area/Math.max(1,length)*1.5,3,size*.42);
+    const paths=chains.filter(chain=>chain.length>=2).map(chain=>{
+      const reduced=chain.filter((_,i)=>i===0||i===chain.length-1||i%2===0);
+      return 'M'+reduced.map(i=>`${(i%width-pad).toFixed(1)} ${(Math.floor(i/width)-pad).toFixed(1)}`).join(' L');
+    });
+    const result={advance,paths,stroke};glyphTraceCache.set(key,result);if(glyphTraceCache.size>500)glyphTraceCache.clear();return result;
+  }
+  function textSignature(it){return JSON.stringify(['letter-strokes-1',it.text,it.font,it.fontSize,it.color,it.w,it.h]);}
   async function refreshHandwriting(it){
     if(!HANDWRITING_FONTS[it.font])return;
     const signature=textSignature(it),family=HANDWRITING_FONTS[it.font],rows=String(it.text||'').split('\n').slice(0,8);
@@ -387,11 +479,24 @@
       const ctx=canvas.getContext('2d');ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.scale(ratio,ratio);
       const size=Math.max(12,Math.min(it.fontSize,(it.h-8)/(Math.max(1,rows.length)*1.16)));
       ctx.font=`${size}px "${family}"`;ctx.textBaseline='top';ctx.fillStyle=it.color||'#213b4b';
-      const longest=Math.max(1,...rows.map(row=>ctx.measureText(row).width)),fit=Math.min(1,(it.w-8)/longest);
-      ctx.scale(fit,1);rows.forEach((row,index)=>ctx.fillText(row,4/fit,2+index*size*1.16));
-      const src=canvas.toDataURL('image/png'),trace=await traceImage(src);
+      const longest=Math.max(1,...rows.map(row=>[...row].reduce((sum,c)=>sum+ctx.measureText(c).width,0))),fit=Math.min(1,(it.w-8)/longest);
+      ctx.scale(fit,1);const letterPaths=[];
+      rows.forEach((row,line)=>{let left=4/fit;const top=2+line*size*1.16;
+        for(const char of row){
+          if(!/\s/u.test(char)){
+            ctx.fillText(char,left,top);
+            const glyph=traceGlyphStrokes(char,family,size);
+            for(const d of glyph.paths){
+              const translated=d.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g,(_,x,y)=>`${((left+Number(x))*fit).toFixed(1)} ${(top+Number(y)).toFixed(1)}`);
+              letterPaths.push({d:translated,sw:glyph.stroke});
+            }
+          }
+          left+=ctx.measureText(char).width;
+        }
+      });
+      const src=canvas.toDataURL('image/png');
       if(textSignature(it)!==signature||!state.project.scenes.some(s=>s.items.includes(it)))return;
-      it.handwritingSrc=src;it.handwritingSignature=signature;it.tracePaths=trace.paths;it.fillPaths=trace.fillPaths;it.transparentArtwork=true;changed(false);
+      it.handwritingSrc=src;it.handwritingSignature=signature;it.letterPaths=letterPaths;it.tracePaths=[];it.fillPaths=[];it.transparentArtwork=true;changed(false);
     }catch(e){console.error(e);toast('Could not load that writing style.');}
   }
   function scheduleHandwriting(it){
