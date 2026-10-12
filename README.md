@@ -14,7 +14,7 @@ For the full Claude Code migration guide, including the saved project backup and
    git clone https://github.com/jessenorthup24-cloud/whiteboard-studio.git
    ```
 3. In the `whiteboard-studio` folder, run `npm run dev` and open `http://127.0.0.1:4173`. No package installation is needed.
-4. Bring your projects over. They live in the browser, not in Git. On the old machine or the live site, open **My projects → Download backup**. On the new machine, use **My projects → Import backup**. Keep backup files in `project-backups/`, which Git ignores so private content is never published.
+4. Bring your projects over. They live in the browser, not in this public repository. Backups are kept in the private repository `jessenorthup24-cloud/whiteboard-studio-projects`. Download the newest file from its `backups/` folder, then on the live site or local app use **My projects → Import backup**, once per browser. To save new work, use **Download backup** and add the file to that private repository. Local copies go in `project-backups/`, which Git ignores so private content is never published.
 
 To work on the app with Claude Code, open the folder and start with [HANDOFF.md](HANDOFF.md). Pushing to `main` redeploys the live site within a few minutes.
 

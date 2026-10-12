@@ -9,7 +9,7 @@ Build a browser-based whiteboard video editor inspired by VideoScribe. The user 
 1. Clone `https://github.com/jessenorthup24-cloud/whiteboard-studio` and open the folder in Claude Code.
 2. Use Node.js and run `npm run dev` (or `node serve.cjs`). No dependency installation is required.
 3. Open `http://127.0.0.1:4173` in a browser.
-4. To load the user's projects, use **My projects → Import backup** with a backup JSON. Backups go in `project-backups/`, which Git ignores, so they must be copied between machines separately or downloaded from the live site with **Download backup**. The 2026-10-12 backup contains one project, **Your first story**, with one scene.
+4. To load the user's projects, use **My projects → Import backup** with a backup JSON. The user's backups are stored in the private repository `jessenorthup24-cloud/whiteboard-studio-projects` (`backups/`); download the newest into `project-backups/`, which Git ignores. See `CLAUDE.md` for the steps. The 2026-10-12 backup contains one project, **Your first story**, with one scene.
 5. Run `npm run check` to check JavaScript syntax after code changes.
 
 ## Live site
