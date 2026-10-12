@@ -4,6 +4,20 @@ A browser-based whiteboard video editor prototype.
 
 For the full Claude Code migration guide, including the saved project backup and artwork inventory, read [HANDOFF.md](HANDOFF.md).
 
+**Live site:** https://jessenorthup24-cloud.github.io/whiteboard-studio/ — published automatically from `main` by GitHub Pages.
+
+## Set up on another machine
+
+1. Install [Git](https://git-scm.com/) and [Node.js](https://nodejs.org/) (any current LTS version).
+2. Clone the repository:
+   ```bash
+   git clone https://github.com/jessenorthup24-cloud/whiteboard-studio.git
+   ```
+3. In the `whiteboard-studio` folder, run `npm run dev` and open `http://127.0.0.1:4173`. No package installation is needed.
+4. Bring your projects over. They live in the browser, not in Git. On the old machine or the live site, open **My projects → Download backup**. On the new machine, use **My projects → Import backup**. Keep backup files in `project-backups/`, which Git ignores so private content is never published.
+
+To work on the app with Claude Code, open the folder and start with [HANDOFF.md](HANDOFF.md). Pushing to `main` redeploys the live site within a few minutes.
+
 ## Run locally
 
 Install Node.js, then run `node serve.cjs` in this folder and open `http://127.0.0.1:4173` in your browser. No package installation is needed.

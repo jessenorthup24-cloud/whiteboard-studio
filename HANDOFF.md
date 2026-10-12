@@ -6,11 +6,15 @@ Build a browser-based whiteboard video editor inspired by VideoScribe. The user 
 
 ## Open and run
 
-1. Open this folder in Claude Code: `C:\Users\Jesse\Documents\Codex\WhiteboardStudio-Claude`.
+1. Clone `https://github.com/jessenorthup24-cloud/whiteboard-studio` and open the folder in Claude Code.
 2. Use Node.js and run `npm run dev` (or `node serve.cjs`). No dependency installation is required.
 3. Open `http://127.0.0.1:4173` in a browser.
-4. In **My projects**, choose **Import backup** and select `project-backups/hosted-projects-2026-10-12.json` to load the user's hosted project into the local browser. The backup contains one project, **Your first story**, with one scene. It is deliberately excluded from Git.
+4. To load the user's projects, use **My projects → Import backup** with a backup JSON. Backups go in `project-backups/`, which Git ignores, so they must be copied between machines separately or downloaded from the live site with **Download backup**. The 2026-10-12 backup contains one project, **Your first story**, with one scene.
 5. Run `npm run check` to check JavaScript syntax after code changes.
+
+## Live site
+
+The live site is [jessenorthup24-cloud.github.io/whiteboard-studio](https://jessenorthup24-cloud.github.io/whiteboard-studio/), served free by GitHub Pages from the public repository. Every push to `main` runs `.github/workflows/pages.yml`, which runs `npm run check` and publishes `dist/`. Deployment status is in the repository's **Actions** tab. The site is static: projects stay in each visitor's browser, so the live site's projects are separate from local ones and move between them with backups.
 
 Projects live in browser IndexedDB under the `whiteboard-studio` database. The hosted site's storage and the local site's storage are separate. **Download backup** and **Import backup** in **My projects** move projects between them. The JSON includes embedded uploads and any project audio, so protect it like user content. Importing a backup into a browser that already has a project with the same ID creates an additional imported copy.
 
@@ -20,9 +24,18 @@ The editor is a dependency-free static web app. It has scenes; a timeline with t
 
 The library has **260 individual items**: 40 black-outline drawings, 120 colored Bible-era drawings, 80 colored everyday drawings, and 20 precise colored arrows and digits. The eight everyday source sheets and 100 individual transparent PNGs are in `artwork/everyday-illustrations/`. All 28 PNG source sheets used by the app are in `dist/assets/sheets/`; arrows and digits are generated in code. The app's marker hand versions are in `dist/assets/`, with `marker-hand-v3.png` active.
 
-Text offers ten smooth handwriting fonts and ten single-stroke fonts. Single-stroke fonts follow bundled Hershey-style glyph paths. Smooth fonts are rendered with Google Fonts, then the app derives centerline paths from each letter's pixels and uses those paths to reveal the matching rendered letter. Spaces advance the pen without drawing. This is the current implementation of the requirement that text be *written* rather than revealed with a broad wipe. It is an approximation of true pen strokes and remains a useful area for visual refinement.
+Text offers ten smooth handwriting fonts and ten single-stroke fonts. Single-stroke fonts follow bundled Hershey-style glyph paths. Smooth fonts are rendered with Google Fonts, then the app derives pen strokes from each letter's pixels and uses them to reveal the matching rendered letter. Spaces advance the pen without drawing. Each letter is traced once per font at a fixed 160px size (`GLYPH_TRACE_SIZE`) and cached. The tracer:
 
-The current private hosted site is [Whiteboard Studio](https://whiteboard-studio-jesse-2026.jessenorthup25.chatgpt.site/). Its Sites project ID is in `.openai/hosting.json`. The latest published source commit at handoff is `574274090b7342fc12ea34d9b261352fb6cf3e9e`. The Git remote named `codex-source` points to the previous local checkout for reference; no deployment credential is stored in this folder.
+- thins the letter to a centerline and builds a graph of ends, junctions and segments;
+- prunes thinning spurs, judged by how far a branch's true end reaches past the junction's own thickness;
+- extends free ends to the letter's edge;
+- chains segments into continuous strokes, going as straight as possible at junctions and retracing short peaks such as the points of "M";
+- orders strokes top-left first, draws closed bowls counter-clockwise from the top, and puts dots after the letter body;
+- sizes each stroke's pen width from the letter's local thickness, then adds small patch strokes for any ink the strokes would miss, so nothing pops in at the end.
+
+Strokes are smoothed into quadratic curves. Typical results are 2–3 strokes per letter and about 99.5% coverage, compared with about 30 fragments and 90–97% coverage from the first version. Saved text carries a `letter-strokes-N` signature in `textSignature`, and older projects are re-traced automatically when opened. The result is still an approximation of real handwriting order: for example, "a" draws its stem before its bowl.
+
+The earlier private hosted site is [Whiteboard Studio](https://whiteboard-studio-jesse-2026.jessenorthup25.chatgpt.site/). Its Sites project ID is in `.openai/hosting.json`, and its last published source commit was `574274090b7342fc12ea34d9b261352fb6cf3e9e`. That site is not updated by this repository; the GitHub Pages site above is the current one. No deployment credential is stored in this folder.
 
 ## Important files
 
@@ -41,7 +54,7 @@ The current private hosted site is [Whiteboard Studio](https://whiteboard-studio
 
 ## Code map
 
-`SHEETS` and `FONT_OPTIONS` near the top of `dist/app.js` define the asset and font menus. `separateColoredSheet` isolates colored drawings from each source sheet by connected transparent pixel regions. `generateSymbolDrawing` creates arrows and digits. `traceImage` converts uploaded and library images into contour and fill paths. `traceGlyphStrokes` and `refreshHandwriting` build the smooth-font writing paths. `elementMarkup`, `maskedDrawing`, and `renderStage` draw the editor and previews. Camera framing is handled by `cameraBox`, the editor view, and `previewCamera`. `openDb`, `saveProject`, `downloadProjectBackup`, and `importProjectBackup` handle local project data. `exportVideo` uses browser `MediaRecorder`.
+`SHEETS` and `FONT_OPTIONS` near the top of `dist/app.js` define the asset and font menus. `separateColoredSheet` isolates colored drawings from each source sheet by connected transparent pixel regions. `generateSymbolDrawing` creates arrows and digits. `traceImage` converts uploaded and library images into contour and fill paths. `traceGlyphStrokes` (with `simplifyStroke`, `relaxStroke` and `strokePathData`) and `refreshHandwriting` build the smooth-font writing paths. `elementMarkup`, `maskedDrawing`, and `renderStage` draw the editor and previews. Camera framing is handled by `cameraBox`, the editor view, and `previewCamera`. `openDb`, `saveProject`, `downloadProjectBackup`, and `importProjectBackup` handle local project data. `exportVideo` uses browser `MediaRecorder`.
 
 ## Product requirements from the user
 
