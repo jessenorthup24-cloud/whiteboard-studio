@@ -84,8 +84,18 @@
   }
   const scene = () => state.project.scenes[state.sceneIndex];
   const item = () => scene()?.items.find(x=>x.id===state.selected) || null;
-  const itemLen = (x) => Math.max(.1,num(x.duration,1)) + Math.max(0,num(x.pause));
-  const sceneLen = (s) => s.items.reduce((a,x)=>a+itemLen(x),0);
+  // When each item of a scene plays. An item starts once everything before it has finished (pauses included), or
+  // together with the item before it when it is set to start with previous; then its own delay is added. Items that
+  // start together form a group, shown stacked in the timeline. Entries: {it, from, start, end, next, group, together}.
+  function sceneSchedule(s){
+    let cursor=0,previous=0,group=-1;
+    return s.items.map((it,i)=>{
+      const d=Math.max(.1,num(it.duration,1)),p=Math.max(0,num(it.pause)),together=i>0&&!!it.withPrevious,from=together?previous:cursor,start=from+Math.max(0,num(it.delay));
+      if(!together)group++;previous=start;cursor=Math.max(cursor,start+d+p);
+      return {it,from,start,end:start+d,next:start+d+p,group,together};
+    });
+  }
+  const sceneLen = (s) => sceneSchedule(s).reduce((a,e)=>Math.max(a,e.next),0);
   const totalLen = () => state.project.scenes.reduce((a,s)=>a+sceneLen(s),0);
   const sceneStart = (i) => state.project.scenes.slice(0,i).reduce((a,s)=>a+sceneLen(s),0);
   function positionAt(t){
@@ -98,16 +108,13 @@
   }
   function visualAt(s,t){
     const firstCamera=s.items.find(x=>x.type==='camera');
-    let clock=0,camera=firstCamera?{cx:firstCamera.cx,cy:firstCamera.cy,zoom:firstCamera.zoom}:{cx:800,cy:450,zoom:1},visible=[];
-    for(const it of s.items){
-      const start=clock,end=start+Math.max(.1,num(it.duration,1));
+    let camera=firstCamera?{cx:firstCamera.cx,cy:firstCamera.cy,zoom:firstCamera.zoom}:{cx:800,cy:450,zoom:1},visible=[];
+    for(const {it,start,end} of sceneSchedule(s)){
       if(it.type==='camera'){
         const next={cx:it.cx,cy:it.cy,zoom:it.zoom};
         if(t>=end) camera=next;
         else if(t>=start){const p=clamp((t-start)/(end-start),0,1);camera={cx:camera.cx+(next.cx-camera.cx)*p,cy:camera.cy+(next.cy-camera.cy)*p,zoom:camera.zoom+(next.zoom-camera.zoom)*p};}
       }else if(t>=start){visible.push({it,progress:clamp((t-start)/(end-start),0,1),active:t<end});}
-      clock+=itemLen(it);
-      if(t<clock) break;
     }
     return {camera,visible};
   }
@@ -121,9 +128,14 @@
     let n=100;try{n=p.getTotalLength()}catch{}p.remove();lengthCache.set(d,n);return n;
   }
   let exportRender=false,exportHand=null;
-  // Rotation and snapping on the canvas. Items rotate about their centre (it.rotation, in degrees). While a rotated item
-  // is drawn, handRotation lets the hand land on the right point and stay upright.
-  const SNAP_PX=8;let stageSnap=true,handRotation=null;
+  // Rotation and snapping on the canvas. Items rotate about their centre (it.rotation, in degrees) and can be flipped
+  // (it.flipX, it.flipY). While such an item is drawn, handTransform lets the hand land on the right point and stay upright.
+  const SNAP_PX=8;let stageSnap=true,handTransform=null;
+  const matMul=(A,B)=>[A[0]*B[0]+A[2]*B[1],A[1]*B[0]+A[3]*B[1],A[0]*B[2]+A[2]*B[3],A[1]*B[2]+A[3]*B[3],A[0]*B[4]+A[2]*B[5]+A[4],A[1]*B[4]+A[3]*B[5]+A[5]];
+  const matApply=(M,[x,y])=>[M[0]*x+M[2]*y+M[4],M[1]*x+M[3]*y+M[5]];
+  const matInvert=M=>{const d=M[0]*M[3]-M[1]*M[2];return [M[3]/d,-M[1]/d,-M[2]/d,M[0]/d,(M[2]*M[5]-M[3]*M[4])/d,(M[1]*M[4]-M[0]*M[5])/d];};
+  // An item's rotation and flips about its centre, or null when it has neither.
+  function itemMatrix(it){const r=rotationOf(it),fx=it.flipX?-1:1,fy=it.flipY?-1:1;if(!r&&fx===1&&fy===1)return null;const [cx,cy]=centerOf(it),a=r*Math.PI/180,c=Math.cos(a),sn=Math.sin(a);return matMul([1,0,0,1,cx,cy],matMul([c,sn,-sn,c,0,0],matMul([fx,0,0,fy,0,0],[1,0,0,1,-cx,-cy])));}
   const rotationOf=it=>it.type==='camera'?0:num(it.rotation,0)%360;
   const centerOf=it=>[it.x+it.w/2,it.y+it.h/2];
   function rotateVec([x,y],deg){const a=deg*Math.PI/180,c=Math.cos(a),s=Math.sin(a);return [x*c-y*s,x*s+y*c];}
@@ -136,8 +148,8 @@
   }
   // Lines a moving item can snap to: the edges and centres of the other items, the camera frames and the video frame.
   function snapTargets(except){
-    const xs=[],ys=[],add=([x,y,w,h])=>{for(const v of [x,x+w/2,x+w])xs.push({v,from:y,to:y+h});for(const v of [y,y+h/2,y+h])ys.push({v,from:x,to:x+w});};
-    add(baseBox());for(const it of scene().items)if(it.id!==except)add(boundsOf(it));
+    const skip=[].concat(except),xs=[],ys=[],add=([x,y,w,h])=>{for(const v of [x,x+w/2,x+w])xs.push({v,from:y,to:y+h});for(const v of [y,y+h/2,y+h])ys.push({v,from:x,to:x+w});};
+    add(baseBox());for(const it of scene().items)if(!skip.includes(it.id))add(boundsOf(it));
     return {xs,ys};
   }
   const stageUnitsPerPixel=()=>editorBox()[2]/Math.max(1,$('#stage').clientWidth);
@@ -154,6 +166,7 @@
       if(sx)mx+=sx.d;if(sy)my+=sy.d;
       if(sx)state.guides.push(guideFor('x',sx,b[1]+my,b[1]+my+b[3]));if(sy)state.guides.push(guideFor('y',sy,b[0]+mx,b[0]+mx+b[2]));
     }
+    if(drag.group){for(const g of drag.group){g.it.x=Math.round((g.x+mx)*10)/10;g.it.y=Math.round((g.y+my)*10)/10;}return;}
     it.x=Math.round((drag.original.x+mx)*10)/10;it.y=Math.round((drag.original.y+my)*10)/10;
   }
   // Dragging the rotate handle turns the item about its centre. It clicks into place near every 45 degrees; Shift
@@ -178,10 +191,10 @@
     return (state.guides||[]).map(g=>`<line x1="${g.x1}" y1="${g.y1}" x2="${g.x2}" y2="${g.y2}" stroke="#e84393" stroke-width="${sw}" stroke-dasharray="${sw*4} ${sw*3}" pointer-events="none"/>`).join('');
   }
   function handMarkup(x,y){
-    const world=handRotation?rotatePoint([x,y],[handRotation.cx,handRotation.cy],handRotation.r):[x,y];
+    const world=handTransform?matApply(handTransform,[x,y]):[x,y];
     if(exportRender){exportHand={x:world[0],y:world[1]};return '';}
-    const image=`<image href="${HAND.src}" x="${x-HAND.x}" y="${y-HAND.y}" width="${HAND.w}" height="${HAND.h}" pointer-events="none"/>`;
-    return handRotation?`<g transform="rotate(${-handRotation.r} ${x} ${y})">${image}</g>`:image;
+    const image=`<image href="${HAND.src}" x="${world[0]-HAND.x}" y="${world[1]-HAND.y}" width="${HAND.w}" height="${HAND.h}" pointer-events="none"/>`;
+    return handTransform?`<g transform="matrix(${matInvert(handTransform).map(v=>+v.toFixed(6)).join(' ')})">${image}</g>`:image;
   }
   function sequenceMarkup(paths,progress,withHand){
     const strokes=paths.flatMap(p=>(p.d.match(/M[^M]*/g)||[p.d]).filter(Boolean).map(d=>({...p,d})));
@@ -323,9 +336,9 @@
     return `<defs><mask id="${maskId}" maskUnits="userSpaceOnUse" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}"><rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" fill="black"/>${drawn.markup}</mask></defs><g mask="url(#${maskId})">${body}</g>${drawn.hand}`;
   }
   function elementMarkup(it,progress=1,selectable=false,hand=false){
-    const r=rotationOf(it);if(!r)return drawElement(it,progress,selectable,hand);
-    const [cx,cy]=centerOf(it),outer=handRotation;handRotation={r,cx,cy};
-    try{return `<g transform="rotate(${r} ${cx} ${cy})">${drawElement(it,progress,selectable,hand)}</g>`;}finally{handRotation=outer;}
+    const m=itemMatrix(it);if(!m)return drawElement(it,progress,selectable,hand);
+    const outer=handTransform;handTransform=outer?matMul(outer,m):m;
+    try{return `<g transform="matrix(${m.map(v=>+v.toFixed(6)).join(' ')})">${drawElement(it,progress,selectable,hand)}</g>`;}finally{handTransform=outer;}
   }
   function drawElement(it,progress,selectable,hand){
     const attr=selectable?`data-item="${esc(it.id)}" style="cursor:move"`:'';
@@ -355,13 +368,16 @@
   function renderMarkup(s,vis,editing=false,frameBox=baseBox()){
     let markup=`<rect x="${frameBox[0]}" y="${frameBox[1]}" width="${frameBox[2]}" height="${frameBox[3]}" fill="${esc(s.background||'#ffffff')}"/>`;
     if(editing)for(const cam of s.items.filter(x=>x.type==='camera')){const [x,y,w,h]=cameraBox(cam);markup+=`<rect data-item="${esc(cam.id)}" x="${x}" y="${y}" width="${w}" height="${h}" fill="#72baa20d" stroke="#64a99a" stroke-width="${Math.max(2,frameBox[2]/500)}" stroke-dasharray="${Math.max(10,frameBox[2]/90)} ${Math.max(6,frameBox[2]/150)}" style="cursor:move" pointer-events="all"/>`;}
-    for(const v of vis.visible){
+    for(const v of [...vis.visible].sort((a,b)=>num(a.it.z)-num(b.it.z))){
       const it=v.it;
       markup+=elementMarkup(it,v.progress,editing,v.active&&!editing);
     }
     if(editing){
       const selected=item();
-      if(selected)markup+=selectionMarkup(selected,frameBox);
+      const many=selectedItems().filter(x=>x.type!=='camera');
+      if(many.length>1){const sw=Math.max(2,frameBox[2]/650);for(const it of many){const [x,y,w,h]=[it.x,it.y,it.w,it.h],r=rotationOf(it),[cx,cy]=centerOf(it);markup+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#f27a59" stroke-width="${sw}" stroke-dasharray="${sw*3} ${sw*2}" ${r?`transform="rotate(${r} ${cx} ${cy})"`:''} pointer-events="none"/>`;}const [ux,uy,uw,uh]=unionBox(many);markup+=`<rect x="${ux}" y="${uy}" width="${uw}" height="${uh}" fill="#f27a5908" stroke="#f27a59" stroke-width="${sw}" pointer-events="none"/>`;}
+      else if(selected)markup+=selectionMarkup(selected,frameBox);
+      if(state.marquee){const [x,y,w,h]=state.marquee,sw=Math.max(1.5,frameBox[2]/800);markup+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#64a99a14" stroke="#64a99a" stroke-width="${sw}" stroke-dasharray="${sw*4} ${sw*3}" pointer-events="none"/>`;}
       markup+=guidesMarkup(frameBox);
     }
     return markup;
@@ -374,7 +390,7 @@
     const box=state.preview?(state.previewCameraBox||cameraBox(vis.camera)):editorBox();
     $('#stage').setAttribute('viewBox',box.join(' '));
     $('#stage').style.cursor=!state.preview&&state.tool==='pan'?(state.drag?.mode==='pan'?'grabbing':'grab'):'default';
-    $('#stage').innerHTML=renderMarkup(s,vis,!state.preview,box);
+    $('#stage').innerHTML=renderMarkup(s,vis,!state.preview,box)+(state.preview?captionMarkup(box,state.time):'');
     $('#sceneNumber').textContent=String((state.preview?loc.index:state.sceneIndex)+1).padStart(2,'0');
     $('#sceneTitle').textContent=s.name;
     $('#modeLabel').textContent=state.preview?(state.previewCameraBox?'Previewing locked camera frame':'Previewing video'):(state.tool==='pan'?'Panning whiteboard':'Editing whiteboard');
@@ -399,17 +415,34 @@
   function tileLabel(it){return it.type==='icon'?ICONS[it.icon]?.name||it.label||'Drawing':it.type==='text'?(it.text||'Text').split('\n')[0]:it.type==='camera'?'Camera move':it.type==='shape'?'Shape':it.type==='image'?(it.label||'Uploaded image'):'Drawing';}
   // Timeline tiles are as wide as their duration (with a minimum so labels fit), followed by a striped tail for the pause.
   const TIMELINE_PX=56,TILE_MIN=84,TILE_GAP=6,PAUSE_MIN=8;let timelineBoxes=[];
+  let timelineGroups=[];
   function timelineLayout(){
-    let x=0,t=0;
-    return scene().items.map(it=>{const d=Math.max(.1,num(it.duration,1)),p=Math.max(0,num(it.pause)),body=Math.max(TILE_MIN,d*TIMELINE_PX),tail=Math.max(PAUSE_MIN,p*TIMELINE_PX),box={it,x,body,tail,t0:t,d,p};x+=body+tail+TILE_GAP;t+=d+p;return box;});
+    const boxes=[],groups=[];let x=0;
+    for(const e of sceneSchedule(scene())){
+      if(!e.together){groups.push({x,t0:e.from,t1:e.next,width:0,members:[]});}
+      const g=groups[groups.length-1],d=e.end-e.start,p=e.next-e.end,body=Math.max(TILE_MIN,d*TIMELINE_PX),tail=Math.max(PAUSE_MIN,p*TIMELINE_PX),offset=(e.start-g.t0)*TIMELINE_PX;
+      const box={it:e.it,x:g.x+offset,row:g.members.length,body,tail,t0:e.start,d,p,together:e.together};g.members.push(box);boxes.push(box);
+      g.t1=Math.max(g.t1,e.next);g.width=Math.max(g.width,offset+body+tail);
+      x=g.x+g.width+TILE_GAP;
+    }
+    timelineGroups=groups;return boxes;
   }
-  // Scene time to strip position and back. Inside a tile, time runs evenly across its body and then across its pause.
+  // Scene time to strip position and back. In a group of one undelayed item, time runs evenly across the tile's body
+  // and then its pause; in other groups it runs evenly across the group.
   function timelineX(local){
-    for(const b of timelineBoxes){if(local<=b.t0+b.d)return b.x+clamp((local-b.t0)/b.d,0,1)*b.body;if(local<=b.t0+b.d+b.p)return b.x+b.body+(local-b.t0-b.d)/b.p*b.tail;}
-    const last=timelineBoxes[timelineBoxes.length-1];return last?last.x+last.body+last.tail:0;
+    for(const g of timelineGroups){
+      if(local>g.t1)continue;const b=g.members[0];
+      if(g.members.length===1&&b.t0===g.t0){if(local<=b.t0+b.d)return b.x+clamp((local-b.t0)/b.d,0,1)*b.body;return b.x+b.body+(b.p?(local-b.t0-b.d)/b.p*b.tail:0);}
+      return g.x+clamp((local-g.t0)/Math.max(1e-6,g.t1-g.t0),0,1)*g.width;
+    }
+    const last=timelineGroups[timelineGroups.length-1];return last?last.x+last.width:0;
   }
   function timelineTime(x){
-    for(const b of timelineBoxes){if(x<b.x)return b.t0;if(x<=b.x+b.body)return b.t0+(x-b.x)/b.body*b.d;if(x<=b.x+b.body+b.tail)return b.t0+b.d+(b.p?(x-b.x-b.body)/b.tail*b.p:0);}
+    for(const g of timelineGroups){
+      if(x<g.x)return g.t0;if(x>g.x+g.width)continue;const b=g.members[0];
+      if(g.members.length===1&&b.t0===g.t0){if(x<=b.x+b.body)return b.t0+(x-b.x)/b.body*b.d;return b.t0+b.d+(b.p?Math.min(1,(x-b.x-b.body)/b.tail)*b.p:0);}
+      return g.t0+(x-g.x)/Math.max(1,g.width)*(g.t1-g.t0);
+    }
     return sceneLen(scene());
   }
   function tileThumb(it){
@@ -425,13 +458,13 @@
   function renderTimelineStrips(){
     $('#sceneStrip').innerHTML=state.project.scenes.map((s,i)=>`<button class="scene-tile ${i===state.sceneIndex?'active':''}" data-scene="${i}" title="Drag to reorder scenes"><span class="scene-number">${String(i+1).padStart(2,'0')}</span><span class="scene-name">${esc(s.name)}</span><span class="scene-length">${fmt(sceneLen(s))}</span></button>`).join('');
     timelineBoxes=timelineLayout();
-    const width=timelineBoxes.length?timelineX(Infinity)+TILE_GAP:0,len=sceneLen(scene()),every=[1,2,5,10,15,30,60].find(s=>s*TIMELINE_PX>=44)||60;
+    const width=timelineBoxes.length?timelineX(Infinity)+TILE_GAP:0,rows=Math.max(1,...timelineBoxes.map(b=>b.row+1)),len=sceneLen(scene()),every=[1,2,5,10,15,30,60].find(s=>s*TIMELINE_PX>=44)||60;
     let ticks='';for(let t=0;t<=len+1e-6;t+=every)ticks+=`<span class="tick" style="left:${timelineX(t)}px">${Math.round(t)}s</span>`;
     const tiles=timelineBoxes.map(b=>{const it=b.it,sel=it.id===state.selected,idAttr=esc(it.id);
-      return `<button class="item-tile ${sel?'selected':''} ${it.type==='camera'?'camera':''}" data-item="${idAttr}" style="left:${b.x}px;width:${b.body+b.tail}px" title="${esc(tileLabel(it))} · ${b.d.toFixed(1)}s${b.p?` + ${b.p.toFixed(1)}s pause`:''}">
-        <span class="tile-body" style="width:${b.body}px"><span class="tile-top"><span class="thumb">${tileThumb(it)}</span><span class="item-duration">${b.d.toFixed(1)}s</span></span><span class="item-name">${esc(tileLabel(it))}</span><span class="tile-handle" data-handle-kind="duration" data-item="${idAttr}" title="Drag to change how long it takes"></span></span>
+      return `<button class="item-tile ${sel?'selected':''} ${it.type==='camera'?'camera':''}" data-item="${idAttr}" style="left:${b.x}px;top:${b.row*68}px;width:${b.body+b.tail}px" title="${esc(tileLabel(it))} · ${b.d.toFixed(1)}s${b.p?` + ${b.p.toFixed(1)}s pause`:''}${b.together?' · starts with the item before it':''}">
+        <span class="tile-body" style="width:${b.body}px"><span class="tile-top"><span class="thumb">${tileThumb(it)}</span><span class="item-duration">${b.together?'<span class="with-badge" title="Starts with the item before it">⇉</span> ':''}${b.d.toFixed(1)}s</span></span><span class="item-name">${esc(tileLabel(it))}</span><span class="tile-handle" data-handle-kind="duration" data-item="${idAttr}" title="Drag to change how long it takes"></span></span>
         <span class="tile-pause ${b.p?'':'empty'}" style="width:${b.tail}px"><span class="tile-handle" data-handle-kind="pause" data-item="${idAttr}" title="Drag to change the pause after it"></span></span></button>`;}).join('');
-    $('#itemStrip').innerHTML=`<div class="strip-inner" style="width:${Math.max(width,1)}px"><div class="time-ruler" data-ruler title="Click or drag to move the playhead">${ticks}</div><div class="item-row">${tiles}</div><div id="playhead" class="playhead" hidden></div></div>`;
+    $('#itemStrip').innerHTML=`<div class="strip-inner" style="width:${Math.max(width,1)}px;height:${24+rows*68}px"><div class="time-ruler" data-ruler title="Click or drag to move the playhead">${ticks}</div><div class="item-row" style="height:${rows*68-6}px">${tiles}</div><div id="playhead" class="playhead" hidden></div></div>`;
   }
   // The light, per-frame part of the timeline: clock, scrubber, buttons and the playhead.
   function renderTimelineClock(){
@@ -543,7 +576,7 @@
   // Schedules every clip that sounds at or after video time `at` on an audio context, starting `lead` seconds from now.
   // Returns the context time that matches `at` and the started sources.
   function scheduleClips(ctx,at,destination,lead){
-    const now=ctx.currentTime+lead,voices=[];
+    const now=ctx.currentTime+lead,voices=[],spans=state.project.duckMusic===false?[]:narrationSpans(),duckLevel=clamp(num(state.project.duckLevel,.3),0,1),at0=at;
     for(const clip of audioClips()){
       const file=audioFile(clip),buffer=file&&audio.ready.get(file.src),length=clipLength(clip);if(!buffer||length<=0||clip.start+length<=at)continue;
       const into=Math.max(0,at-clip.start),when=now+Math.max(0,clip.start-at),source=ctx.createBufferSource(),gain=ctx.createGain();source.buffer=buffer;
@@ -551,7 +584,12 @@
       gain.gain.setValueAtTime(level(into),when);
       if(fadeIn>into)gain.gain.linearRampToValueAtTime(v,when+fadeIn-into);
       if(fadeOut){if(length-fadeOut>into)gain.gain.setValueAtTime(v,when+length-fadeOut-into);gain.gain.linearRampToValueAtTime(0,when+length-into);}
-      source.connect(gain).connect(destination);source.start(when,num(clip.offset)+into,length-into);voices.push(source);
+      let chain=source.connect(gain);
+      // Music dips to the duck level while narration plays, easing down just before and back up just after.
+      if((clip.lane||0)===0&&spans.length){const duck=ctx.createGain(),T=v=>now+Math.max(0,v-at0);duck.gain.setValueAtTime(spans.some(([a,b])=>a<=at0&&b>at0)?duckLevel:1,now);
+        for(const [a,b] of spans){if(b<=at0)continue;if(a>at0){duck.gain.setValueAtTime(1,T(Math.max(at0,a-.35)));duck.gain.linearRampToValueAtTime(duckLevel,T(a));}duck.gain.setValueAtTime(duckLevel,T(b));duck.gain.linearRampToValueAtTime(1,T(b+.45));}
+        chain=chain.connect(duck);}
+      chain.connect(destination);source.start(when,num(clip.offset)+into,length-into);voices.push(source);
     }
     return {now,voices};
   }
@@ -588,7 +626,7 @@
     $('#audioScroll').scrollLeft=scroll;
   }
   function audioPanel(){
-    return `<div class="panel-eyebrow">SOUND</div><h2 class="panel-title">Audio</h2><p class="panel-help">Place music and narration clips anywhere on the video. Drag them in the audio lanes below the drawings.</p><div class="panel-actions"><button class="button primary" data-audio-add="0">Add music</button><button class="panel-action" data-audio-add="1">Add narration</button><button class="panel-action" data-audio-record>${state.recording?'■ Stop recording':'● Record at playhead'}</button><button class="panel-action" data-action="narrate-all">Narrate all scene scripts</button></div><div class="panel-divider"></div>
+    return `<div class="panel-eyebrow">SOUND</div><h2 class="panel-title">Audio</h2><p class="panel-help">Place music and narration clips anywhere on the video. Drag them in the audio lanes below the drawings.</p><div class="panel-actions"><button class="button primary" data-audio-add="0">Add music</button><button class="panel-action" data-audio-add="1">Add narration</button><button class="panel-action" data-audio-record>${state.recording?'■ Stop recording':'● Record at playhead'}</button><button class="panel-action" data-action="narrate-all">Narrate all scene scripts</button></div><div class="panel-divider"></div><label class="check-row"><input type="checkbox" data-duck ${state.project.duckMusic===false?'':'checked'}> Lower music under narration</label><div class="field"><label>Music level under narration <span id="duckLevelLabel">${Math.round(clamp(num(state.project.duckLevel,.3),0,1)*100)}%</span></label><input data-duck-level type="range" min="0" max="1" step="0.05" value="${clamp(num(state.project.duckLevel,.3),0,1)}"></div><label class="check-row"><input type="checkbox" data-preview-captions ${state.project.previewCaptions?'checked':''}> Show narration captions in preview</label><div class="panel-divider"></div>
       ${audioClips().length?audioClips().map(c=>`<button class="audio-list-item" data-select-clip="${esc(c.id)}"><span>${AUDIO_LANES[c.lane||0]}</span><strong>${esc(audioFile(c)?.name||'Audio')}</strong><small>${fmt(c.start)} – ${fmt(c.start+clipLength(c))}</small></button>`).join(''):'<div class="note-card">Tip: Record at playhead plays the video while you speak, so your narration lines up with the drawing.</div>'}`;
   }
   function clipPanel(clip){
@@ -653,11 +691,14 @@
     host.addEventListener('click',panelClick);$('#inspector').addEventListener('click',panelClick);
     $('#inspector').addEventListener('input',e=>{
       if(e.target.matches('[data-scene-script]')){scene().script=e.target.value;changed(false);return;}
+      if(e.target.matches('[data-duck-level]')){state.project.duckLevel=+e.target.value;$('#duckLevelLabel').textContent=`${Math.round(e.target.value*100)}%`;changed(false);return;}
       if(e.target.matches('[data-voice-speed]')){state.project.voiceSpeed=+e.target.value;$('#voiceSpeedLabel').textContent=`${Math.round(e.target.value*100)}%`;changed(false);return;}
       if(e.target.matches('[data-clip-set]'))applyClipField(e.target.dataset.clipSet,e.target.value);});
     $('#inspector').addEventListener('change',e=>{
       if(e.target.matches('[data-voice]')){state.project.voice=e.target.value;changed(false);return;}
-      if(e.target.matches('[data-scene-fit]')){scene().fitToNarration=e.target.checked;changed(false);return;}
+      if(e.target.matches('[data-scene-timing]')){scene().narrationTiming=e.target.value;changed(false);return;}
+      if(e.target.matches('[data-duck]')){state.project.duckMusic=e.target.checked;changed(false);return;}
+      if(e.target.matches('[data-preview-captions]')){state.project.previewCaptions=e.target.checked;changed(false);return;}
       if(e.target.matches('[data-clip-set]')){applyClipField(e.target.dataset.clipSet,e.target.value);renderInspector();}});
     $('#inspector').addEventListener('focusin',e=>{if(e.target.matches('[data-clip-set],[data-scene-script]'))snapshot();});
     // Dragging a clip moves it (and between lanes); dragging an edge trims it. Moves snap to the playhead, scene
@@ -750,15 +791,15 @@
     const text=String(s.script||'').trim();if(!text){toast('Write a script for this scene first.');return false;}
     if(tts.busy.has(s.id))return false;tts.busy.add(s.id);tts.status='Loading the voice model…';if(scene()===s)renderInspector();
     try{
-      const {voice,speed}=voiceSettings(),{samples,rate}=await speak(text,voice,speed),seconds=samples.length/rate;
+      const {voice,speed}=voiceSettings(),{samples,rate,sentences}=await speak(text,voice,speed),seconds=samples.length/rate,mode=timingMode(s);
       const src=wavDataUrl(samples,rate),buffer=await loadAudioFile({src});
       snapshot();
       // Replace this scene's earlier narration, and drop its audio file if nothing else uses it.
       const clips=audioClips();for(const old of clips.filter(c=>c.scene===s.id)){clips.splice(clips.indexOf(old),1);if(!clips.some(c=>c.file===old.file))delete state.project.audioFiles[old.file];}
-      if(s.fitToNarration!==false)fitSceneTo(s,seconds+.5);
+      if(mode==='fit')fitSceneTo(s,seconds+.5);else if(mode==='sentences'&&sentences?.length)timeSceneToSentences(s,sentences,seconds+.5);
       const fileId=id(),name=`${s.name} narration`;(state.project.audioFiles||(state.project.audioFiles={}))[fileId]={name,src,duration:buffer.duration};
-      clips.push({id:id(),file:fileId,lane:1,start:0,offset:0,length:buffer.duration,volume:1,fadeIn:0,fadeOut:0,scene:s.id});
-      tts.status=`Narration ready: ${seconds.toFixed(1)} s${s.fitToNarration!==false?', scene timing matched':''}.`;changed();return true;
+      clips.push({id:id(),file:fileId,lane:1,start:0,offset:0,length:buffer.duration,volume:1,fadeIn:0,fadeOut:0,scene:s.id,sentences:sentences||[]});
+      tts.status=`Narration ready: ${seconds.toFixed(1)} s${mode==='sentences'?', drawings matched to its sentences':mode==='fit'?', scene timing matched':''}.`;changed();return true;
     }catch(e){console.error(e);tts.status='The narration could not be made. Check your connection for the first download and try again.';toast('Could not make the narration.');return false;}
     finally{tts.busy.delete(s.id);if(state.tool!=='audio'&&!item()&&!state.selectedClip)renderInspector();}
   }
@@ -767,11 +808,11 @@
     let made=0;for(const s of scenes)if(await narrateScene(s))made++;toast(`Narrated ${made} of ${scenes.length} scene${scenes.length===1?'':'s'}.`);
   }
   function scriptFields(s){
-    const busy=tts.busy.has(s.id),fit=s.fitToNarration!==false;
+    const busy=tts.busy.has(s.id),mode=timingMode(s),retime=!!sceneNarrationMarks(s);
     return `<div class="panel-divider"></div><div class="field"><label>Script</label><textarea data-scene-script rows="5" placeholder="What the narrator says in this scene…">${esc(s.script||'')}</textarea></div>
       <div class="field"><label>Voice</label><select data-voice>${VOICES.map(([v,n])=>`<option value="${v}" ${(state.project.voice||'af_heart')===v?'selected':''}>${n}</option>`).join('')}</select></div>
       <div class="field"><label>Speaking speed <span id="voiceSpeedLabel">${Math.round(clamp(num(state.project.voiceSpeed,1),.6,1.5)*100)}%</span></label><input data-voice-speed type="range" min="0.6" max="1.5" step="0.05" value="${clamp(num(state.project.voiceSpeed,1),.6,1.5)}"></div>
-      <label class="check-row"><input type="checkbox" data-scene-fit ${fit?'checked':''}> Fit this scene's timing to the narration</label>
+      <div class="field"><label>Scene timing with narration</label><select data-scene-timing>${[['sentences','Match each drawing to its sentence'],['fit','Fit the whole scene to the narration'],['none','Keep my timing']].map(([v,n])=>`<option value="${v}" ${mode===v?'selected':''}>${n}</option>`).join('')}</select></div>${retime?'<button class="panel-action retime-button" data-action="retime">Re-time drawings to the narration</button>':''}
       <div class="narrate-row"><button class="panel-action" data-action="preview-script" ${tts.busy.has('script')?'disabled':''}>${tts.playing?.what==='script'?'■ Stop':tts.busy.has('script')?'Speaking…':'▶ Preview'}</button><button class="panel-action" data-action="preview-voice" ${tts.busy.has('voice')?'disabled':''}>${tts.playing?.what==='voice'?'■ Stop':tts.busy.has('voice')?'Speaking…':'Try voice'}</button></div>
       <button class="button primary narrate-button" data-action="narrate" ${busy?'disabled':''}>${busy?'Adding narration…':audioClips().some(c=>c.scene===s.id)?'Replace narration on timeline':'Add narration to timeline'}</button>
       <p id="narrationStatus" class="panel-help">${esc(tts.status)}</p>
@@ -814,9 +855,9 @@
   }
   // Moves the drawings that start at or after the playhead into a new scene right after this one.
   function splitSceneAt(t){
-    const index=state.sceneIndex,s=scene(),local=t-sceneStart(index);let clock=0,at=-1;
+    const index=state.sceneIndex,s=scene(),local=t-sceneStart(index),schedule=sceneSchedule(s);
     if(local<0||local>sceneLen(s)+1e-6){toast('Move the playhead into this scene to split it.');return;}
-    for(let i=0;i<s.items.length;i++){if(clock>=local-1e-6){at=i;break;}clock+=itemLen(s.items[i]);}
+    const at=schedule.findIndex(e=>!e.together&&e.from>=local-1e-6),clock=at>=0?schedule[at].from:0;
     if(at<=0){toast('Move the playhead between two drawings in this scene to split it.');return;}
     snapshot();const rest={id:id(),name:`${s.name} (continued)`,background:s.background,items:s.items.splice(at)};state.project.scenes.splice(index+1,0,rest);
     for(const c of audioClips())if(c.scene===s.id&&num(c.sceneOffset)>=clock-1e-6){c.scene=rest.id;c.sceneOffset=num(c.sceneOffset)-clock;}
@@ -858,11 +899,133 @@
     $('#audioEditor').addEventListener('contextmenu',e=>{const el=e.target.closest('[data-clip]'),clip=el&&clipById(el.dataset.clip);if(!clip)return;e.preventDefault();
       const t=Math.max(0,(e.clientX-$('#audioScroll .audio-inner').getBoundingClientRect().left)/audioScale());selectClip(clip.id);showClipMenu(clip,t,e.clientX,e.clientY);});
   }
+  // How a scene follows its narration (scene.narrationTiming): 'sentences' gives each drawing its own sentence,
+  // 'fit' stretches the whole scene to the narration, 'none' keeps the scene's own timing.
+  const timingMode=s=>s.narrationTiming||(s.fitToNarration===false?'none':'sentences');
+  // Gives each drawing a slot of the narration. With as many drawings as sentences, each starts with its sentence; with
+  // fewer, they spread across the sentences; with more, several take turns within a sentence. marks are sentence times
+  // from the scene's start; total is how long the scene should last.
+  function timeSceneToSentences(s,marks,total){
+    const items=s.items,n=items.length,m=marks.length;if(!n||!m)return;
+    const sentenceOf=i=>n<=m?Math.round(i*m/n):Math.floor(i*m/n);
+    const starts=items.map((_,i)=>{const k=sentenceOf(i),mark=marks[k];if(n<=m)return mark.start;
+      const shared=items.map((__,j)=>j).filter(j=>sentenceOf(j)===k);return mark.start+(mark.end-mark.start)*shared.indexOf(i)/shared.length;});
+    starts[0]=0;
+    items.forEach((it,i)=>{const slot=Math.max(.3,(i<n-1?starts[i+1]:total)-starts[i]);it.withPrevious=false;it.delay=0;
+      it.duration=Math.round(clamp(num(it.duration,1),.3,Math.max(.3,slot-.1))*100)/100;it.pause=Math.round(Math.max(0,slot-it.duration)*100)/100;});
+  }
+  // Sentence times of a scene's narration, measured from the scene's start, and when the narration ends.
+  function sceneNarrationMarks(s){
+    const clip=audioClips().filter(c=>c.scene===s.id&&c.sentences?.length).sort((a,b)=>a.start-b.start)[0];if(!clip)return null;
+    const shift=clip.start-sceneStart(state.project.scenes.indexOf(s))-num(clip.offset),end=num(clip.offset)+clipLength(clip);
+    const marks=clip.sentences.filter(x=>x.start<end).map(x=>({text:x.text,start:Math.max(0,x.start+shift),end:Math.min(end,x.end)+shift}));
+    return marks.length?{marks,total:marks[marks.length-1].end+.5}:null;
+  }
+  function retimeScene(s){
+    const found=sceneNarrationMarks(s);if(!found){toast('Add narration to this scene first.');return;}
+    snapshot();timeSceneToSentences(s,found.marks,found.total);changed();toast('Drawings matched to the narration, sentence by sentence.');
+  }
+  // Captions: one cue per narration sentence, at its place in the video and inside the clip's trimmed part.
+  function captionCues(){
+    const cues=[];
+    for(const c of audioClips()){if(!c.sentences?.length)continue;const off=num(c.offset),len=clipLength(c);
+      for(const m of c.sentences){const a=Math.max(m.start,off),b=Math.min(m.end,off+len);if(b-a>=.2)cues.push({start:c.start+a-off,end:c.start+b-off,text:m.text});}}
+    return cues.sort((a,b)=>a.start-b.start);
+  }
+  function srtText(cues,t0=0){
+    const time=v=>{const ms=Math.max(0,Math.round(v*1000)),p=(n,w=2)=>String(n).padStart(w,'0');return `${p(Math.floor(ms/3600000))}:${p(Math.floor(ms/60000)%60)}:${p(Math.floor(ms/1000)%60)},${p(ms%1000,3)}`;};
+    return cues.map((c,i)=>`${i+1}\n${time(c.start-t0)} --> ${time(c.end-t0)}\n${c.text}\n`).join('\n');
+  }
+  function wrapCaption(text,maxWidth,measure){const lines=[];let line='';for(const word of text.split(/\s+/)){const test=line?`${line} ${word}`:word;if(line&&measure(test)>maxWidth){lines.push(line);line=word;}else line=test;}if(line)lines.push(line);return lines;}
+  // Draws the caption for video time t at the bottom of an export frame.
+  function drawCaption(ctx,cues,t){
+    const cue=cues.find(c=>t>=c.start&&t<c.end);if(!cue)return;
+    const W=ctx.canvas.width,H=ctx.canvas.height,size=Math.round(Math.min(W,H)*.045);ctx.save();ctx.font=`600 ${size}px "DM Sans", sans-serif`;
+    const lines=wrapCaption(cue.text,W*.8,x=>ctx.measureText(x).width),lh=size*1.3,bw=Math.max(...lines.map(l=>ctx.measureText(l).width))+size*1.2,bh=lines.length*lh+size*.5,x=(W-bw)/2,y=H-bh-H*.05;
+    ctx.fillStyle='rgba(20,28,38,.8)';ctx.beginPath();ctx.roundRect(x,y,bw,bh,size*.4);ctx.fill();
+    ctx.fillStyle='#ffffff';ctx.textAlign='center';ctx.textBaseline='top';lines.forEach((l,i)=>ctx.fillText(l,W/2,y+size*.25+i*lh));ctx.restore();
+  }
+  // The same caption in the preview, drawn into the camera's view.
+  function captionMarkup(box,t){
+    if(!state.project.previewCaptions)return '';const cue=captionCues().find(c=>t>=c.start&&t<c.end);if(!cue)return '';
+    const [x,y,w,h]=box,size=Math.min(w,h)*.045,lines=wrapCaption(cue.text,w*.8,s=>s.length*size*.52),lh=size*1.3,bw=Math.max(...lines.map(l=>l.length*size*.52))+size*1.2,bh=lines.length*lh+size*.5,bx=x+(w-bw)/2,by=y+h-bh-h*.05;
+    return `<g pointer-events="none"><rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="${size*.4}" fill="#141c26" fill-opacity=".8"/>${lines.map((l,i)=>`<text x="${x+w/2}" y="${by+size*.25+i*lh+size*.82}" text-anchor="middle" font-family="DM Sans, sans-serif" font-weight="600" font-size="${size}" fill="#ffffff">${esc(l)}</text>`).join('')}</g>`;
+  }
+  // Where narration plays, merged when close together, for lowering the music underneath.
+  function narrationSpans(){
+    const spans=audioClips().filter(c=>(c.lane||0)===1&&clipLength(c)>0).map(c=>[c.start,c.start+clipLength(c)]).sort((a,b)=>a[0]-b[0]),out=[];
+    for(const sp of spans){const last=out[out.length-1];if(last&&sp[0]-last[1]<.8)last[1]=Math.max(last[1],sp[1]);else out.push([...sp]);}
+    return out;
+  }
+  // Selecting several items: state.selected is the item the inspector shows, state.multi holds the rest of a
+  // multi-selection. Cameras are only ever selected on their own.
+  function selectionIds(){const ids=new Set(state.multi||[]);if(state.selected)ids.add(state.selected);return [...ids].filter(i=>scene().items.some(x=>x.id===i));}
+  const selectedItems=()=>{const ids=selectionIds();return scene().items.filter(x=>ids.includes(x.id));};
+  function setSelection(ids){const list=ids.filter(i=>scene().items.some(x=>x.id===i&&x.type!=='camera'));state.selected=list[list.length-1]||null;state.multi=list;state.selectedClip=null;state.tool='select';renderAll();}
+  function unionBox(items){const boxes=items.map(boundsOf),l=Math.min(...boxes.map(b=>b[0])),t=Math.min(...boxes.map(b=>b[1])),r=Math.max(...boxes.map(b=>b[0]+b[2])),b=Math.max(...boxes.map(b=>b[1]+b[3]));return [l,t,r-l,b-t];}
+  // The shot that shows an item: the camera frame when it starts drawing, or the video frame.
+  function frameFor(it){const e=sceneSchedule(scene()).find(x=>x.it===it);return cameraBox(visualAt(scene(),e?e.start:0).camera);}
+  // Aligns items to a box: the selection's own bounds, or for a single item the frame that shows it.
+  function alignItems(items,how){
+    if(!items.length)return;const ref=items.length>1?unionBox(items):frameFor(items[0]);snapshot();
+    for(const it of items){const b=boundsOf(it),dx=how==='left'?ref[0]-b[0]:how==='center'?ref[0]+ref[2]/2-b[0]-b[2]/2:how==='right'?ref[0]+ref[2]-b[0]-b[2]:0,dy=how==='top'?ref[1]-b[1]:how==='middle'?ref[1]+ref[3]/2-b[1]-b[3]/2:how==='bottom'?ref[1]+ref[3]-b[1]-b[3]:0;it.x=Math.round((it.x+dx)*10)/10;it.y=Math.round((it.y+dy)*10)/10;}
+    changed(false);
+  }
+  // Spreads three or more items so the gaps between them are equal, keeping the outer two in place.
+  function distributeItems(items,axis){
+    if(items.length<3){toast('Select three or more items to distribute.');return;}snapshot();
+    const k=axis==='x'?0:1,list=items.map(it=>({it,b:boundsOf(it)})).sort((a,b)=>a.b[k]+a.b[k+2]/2-(b.b[k]+b.b[k+2]/2)),first=list[0].b,last=list[list.length-1].b;
+    const gap=(last[k]+last[k+2]-first[k]-list.reduce((s,x)=>s+x.b[k+2],0))/(list.length-1);let at=first[k];
+    for(const {it,b} of list){const d=at-b[k];if(axis==='x')it.x=Math.round((it.x+d)*10)/10;else it.y=Math.round((it.y+d)*10)/10;at+=b[k+2]+gap;}
+    changed(false);
+  }
+  // Layer order is separate from draw order: items with a higher z appear on top (it.z, default 0).
+  function arrangeItems(items,how){
+    if(!items.length)return;snapshot();const zs=scene().items.map(x=>num(x.z));
+    for(const it of items){if(how==='front')it.z=Math.max(...zs)+1;else if(how==='back')it.z=Math.min(...zs)-1;else it.z=num(it.z)+(how==='forward'?1:-1);}
+    changed(false);toast(how==='front'?'Brought to front.':how==='back'?'Sent to back.':how==='forward'?'Brought forward.':'Sent backward.');
+  }
+  function flipItems(items,axis){if(!items.length)return;snapshot();for(const it of items){if(axis==='x')it.flipX=!it.flipX;else it.flipY=!it.flipY;}changed();}
+  // Copy, cut and paste. Pasting into the same scene offsets the copies a little so they are easy to see.
+  let clipboard=null;
+  function copyItems(cut){
+    const items=selectedItems().filter(x=>x.type!=='camera');if(!items.length)return;clipboard={scene:scene().id,items:clone(items)};
+    if(cut){snapshot();const ids=items.map(x=>x.id);scene().items=scene().items.filter(x=>!ids.includes(x.id));state.selected=null;state.multi=[];changed();toast(`Cut ${items.length} item${items.length===1?'':'s'}.`);}
+    else toast(`Copied ${items.length} item${items.length===1?'':'s'}.`);
+  }
+  function pasteItems(){
+    if(!clipboard?.items.length){toast('Copy something first.');return;}snapshot();const same=clipboard.scene===scene().id,copies=clone(clipboard.items).map(x=>({...x,id:id(),...(same?{x:x.x+30,y:x.y+30}:{})}));
+    scene().items.push(...copies);if(same)clipboard.items=clone(copies);changed();setSelection(copies.map(x=>x.id));toast(`Pasted ${copies.length} item${copies.length===1?'':'s'}.`);
+  }
+  function deleteItems(items){if(!items.length)return;snapshot();const ids=items.map(x=>x.id);scene().items=scene().items.filter(x=>!ids.includes(x.id));state.selected=null;state.multi=[];changed();}
+  function duplicateItems(items){if(!items.length)return;snapshot();const copies=clone(items).map(x=>({...x,id:id(),x:x.x+35,y:x.y+35}));scene().items.push(...copies);changed();setSelection(copies.map(x=>x.id));}
+  // Arrow keys nudge the selection by one unit, or ten with Shift; a run of nudges is a single undo step.
+  let lastNudge=0;
+  function nudge(dx,dy){const items=selectedItems().filter(x=>x.type!=='camera');if(!items.length)return false;if(Date.now()-lastNudge>800)snapshot();lastNudge=Date.now();for(const it of items){it.x+=dx;it.y+=dy;}changed(false);return true;}
+  const ALIGN_BUTTONS=[['left','⇤','Align left'],['center','↔','Align centres'],['right','⇥','Align right'],['top','⤒','Align top'],['middle','↕','Align middles'],['bottom','⤓','Align bottom']];
+  function arrangeFields(items){
+    const many=items.length>1,b=(attr,label,title)=>`<button class="panel-action icon-action" ${attr} title="${title}">${label}</button>`;
+    return `<div class="field"><label>${many?'Align selection':'Align in its shot'}</label><div class="icon-row">${ALIGN_BUTTONS.map(([v,l,t])=>b(`data-align-items="${v}"`,l,t+(many?'':' of the frame'))).join('')}</div></div>
+      ${many?`<div class="field"><label>Distribute</label><div class="icon-row">${b('data-distribute="x"','⇿ Across','Equal gaps left to right')}${b('data-distribute="y"','⇳ Down','Equal gaps top to bottom')}</div></div>`:''}
+      <div class="field"><label>Arrange</label><div class="icon-row">${b('data-flip="x"','⇋ Flip','Flip left to right')}${b('data-flip="y"','⇵ Flip','Flip upside down')}${b('data-layer="front"','To front','Bring to front (Ctrl+Shift+])')}${b('data-layer="back"','To back','Send to back (Ctrl+Shift+[)')}</div></div>`;
+  }
+  function multiPanel(items){
+    return `<div class="panel-eyebrow">${items.length} ITEMS SELECTED</div><h2 class="panel-title">Selection</h2><p class="panel-help">Drag any of them to move them together. Shift-click to add or remove items.</p>${arrangeFields(items)}<div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-multi="copy">Copy</button><button class="panel-action" data-multi="duplicate">Duplicate</button><button class="panel-action danger" data-multi="delete">Delete</button></div>`;
+  }
+  function bindArrange(){
+    $('#inspector').addEventListener('click',e=>{
+      const items=selectedItems().filter(x=>x.type!=='camera'),a=e.target.closest('[data-align-items]'),d=e.target.closest('[data-distribute]'),f=e.target.closest('[data-flip]'),l=e.target.closest('[data-layer]'),m=e.target.closest('[data-multi]');
+      if(a)alignItems(items,a.dataset.alignItems);if(d)distributeItems(items,d.dataset.distribute);if(f)flipItems(items,f.dataset.flip);if(l)arrangeItems(items,l.dataset.layer);
+      if(m){if(m.dataset.multi==='copy')copyItems(false);if(m.dataset.multi==='duplicate')duplicateItems(items);if(m.dataset.multi==='delete')deleteItems(items);}
+      if(a||d||f||l)renderInspector();
+    });
+  }
   const field=(label,key,val,type='text',opts='')=>`<div class="field"><label>${label}</label><input data-set="${key}" type="${type}" value="${esc(val)}" ${opts}></div>`;
   const selectField=(label,key,val,options)=>`<div class="field"><label>${label}</label><select data-set="${key}">${options.map(([v,n])=>`<option value="${v}" ${val===v?'selected':''}>${n}</option>`).join('')}</select></div>`;
   function renderInspector(){
-    const it=item(),s=scene(),clip=clipById(state.selectedClip);let html='';
-    if(clip&&!it)html=clipPanel(clip);
+    const it=item(),s=scene(),clip=clipById(state.selectedClip),several=selectedItems().filter(x=>x.type!=='camera');let html='';
+    if(several.length>1)html=multiPanel(several);
+    else if(clip&&!it)html=clipPanel(clip);
     else if(it){
       html=`<div class="panel-eyebrow">SELECTED ${it.type.toUpperCase()}</div><h2 class="panel-title">${esc(tileLabel(it))}</h2><p class="panel-help">Fine tune how this part of your story appears.</p>`;
       if(it.type==='camera'){
@@ -871,12 +1034,13 @@
         if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}<div class="field"><label>Align</label><div class="segmented">${[['left','⇤ Left'],['center','↔ Center'],['right','Right ⇥']].map(([v,n])=>`<button data-align="${v}" class="${(it.align||'left')===v?'active':''}" title="Align text ${v}">${n}</button>`).join('')}</div></div>${fontPicker(it)}`;
         if(it.type==='icon'||it.type==='text'||it.type==='vector')html+=field('Color','color',it.color||'#285d63','color');
         if(it.type==='shape')html+=`${selectField('Shape','shape',it.shape,[['round','Rounded rectangle'],['rect','Rectangle'],['circle','Ellipse']])}${field('Fill','fill',it.fill,'color')}`;
-        html+=`<div class="field-row">${field('X position','x',Math.round(it.x),'number','step="1"')}${field('Y position','y',Math.round(it.y),'number','step="1"')}</div><div class="field-row">${field('Width','w',Math.round(it.w),'number','min="10"')}${field('Height','h',Math.round(it.h),'number','min="10"')}</div><div class="field-row">${field('Rotation (°)','rotation',Math.round(num(it.rotation)*10)/10,'number','min="-180" max="180" step="1"')}<div class="field"><label>&nbsp;</label><button class="panel-action" data-action="rotate-reset" ${num(it.rotation)?'':'disabled'}>Straighten</button></div></div>`;
+        html+=`<div class="field-row">${field('X position','x',Math.round(it.x),'number','step="1"')}${field('Y position','y',Math.round(it.y),'number','step="1"')}</div><div class="field-row">${field('Width','w',Math.round(it.w),'number','min="10"')}${field('Height','h',Math.round(it.h),'number','min="10"')}</div><div class="field-row">${field('Rotation (°)','rotation',Math.round(num(it.rotation)*10)/10,'number','min="-180" max="180" step="1"')}<div class="field"><label>&nbsp;</label><button class="panel-action" data-action="rotate-reset" ${num(it.rotation)?'':'disabled'}>Straighten</button></div></div>${arrangeFields([it])}`;
         html+=selectField('Entrance','animation',it.animation==='reveal'?'draw':it.animation,[['draw','Hand draw'],['fade','Fade in'],['slide','Slide in'],['pop','Pop in'],['none','Appear']]);
         if(it.type==='image'&&it.character)html+=characterFaceField(it);
         if(it.type==='image')html+=`<div class="note-card">${it.illustration?'The marker draws the line work first, then colors in each area. Transparent areas stay clear.':'The marker traces visible contours and fills only visible artwork. Transparent areas stay clear.'}</div>`;
       }
-      html+=`<div class="panel-divider"></div><div class="field-row">${field('Duration (sec)','duration',it.duration,'number','min="0.1" max="60" step="0.1"')}${field('Pause (sec)','pause',it.pause,'number','min="0" max="60" step="0.1"')}</div><div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-action="duplicate">Duplicate</button><button class="panel-action" data-action="back">Move earlier</button><button class="panel-action" data-action="forward">Move later</button><button class="panel-action danger" data-action="delete">Delete</button></div>`;
+      const first=s.items[0]===it;
+      html+=`<div class="panel-divider"></div><div class="field"><label>Starts</label><div class="segmented"><button data-start-mode="after" class="${it.withPrevious&&!first?'':'active'}">After previous</button><button data-start-mode="with" class="${it.withPrevious&&!first?'active':''}" ${first?'disabled title="The first item has nothing before it"':''}>With previous</button></div></div><div class="field-row">${field('Duration (sec)','duration',it.duration,'number','min="0.1" max="60" step="0.1"')}${field('Pause (sec)','pause',it.pause,'number','min="0" max="60" step="0.1"')}</div><div class="field-row">${field('Delay (sec)','delay',num(it.delay),'number','min="0" max="60" step="0.1"')}<div class="field"></div></div><div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-action="duplicate">Duplicate</button><button class="panel-action" data-action="back">Move earlier</button><button class="panel-action" data-action="forward">Move later</button><button class="panel-action danger" data-action="delete">Delete</button></div>`;
     }else if(state.tool==='icon'){
       html=libraryPanel();
     }else if(state.tool==='shape'){
@@ -1114,7 +1278,7 @@
       const w=backdrop?1200:file.startsWith('doodles/')?420:300,h=w*art.height/art.width;
       addItem(await withIllustration({...baseItem('image'),label:name||'Illustration',src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,artRef:['art',file],w,h,duration:backdrop?5:2.2},backdrop));
       // A backdrop sits behind everything else in the scene and is drawn first.
-      if(backdrop){const items=scene().items;items.unshift(items.pop());changed();toast(`${name} backdrop added behind the scene and drawn first.`);}else toast(`${name||'Illustration'} added to the canvas.`);
+      if(backdrop){const items=scene().items,added=items.pop();added.z=Math.min(0,...items.map(x=>num(x.z)))-1;items.unshift(added);changed();toast(`${name} backdrop added behind the scene and drawn first.`);}else toast(`${name||'Illustration'} added to the canvas.`);
     }catch(e){console.error(e);toast('Could not add that illustration.');}
   }
   function addTablerIcon(index){
@@ -1530,13 +1694,13 @@
   function addShape(shape){addItem({...baseItem('shape'),shape,fill:'#cde9df',w:350,h:225});}
   function addText(){const it={...baseItem('text'),text:'Your message here',x:470,y:350,w:850,h:130,fontSize:72,color:'#213b4b',font:'patrick'};addItem(it);scheduleHandwriting(it);}
   function addCamera(){addItem({id:id(),type:'camera',cx:state.editorView.cx,cy:state.editorView.cy,zoom:clamp(baseBox()[2]/(state.editorView.w*.72),.2,5),duration:1,pause:.2});}
-  function selectItem(itemId){state.selected=itemId;state.selectedClip=null;state.tool='select';renderAll();}
+  function selectItem(itemId){state.selected=itemId;state.multi=[];state.selectedClip=null;state.tool='select';renderAll();}
   function pause(){state.playing=false;cancelAnimationFrame(state.frame);stopClips();audio.clockActive=false;renderTimelineClock();}
   // While previewing, the timeline shows the scene being played.
   function followPlayingScene(){const loc=positionAt(state.time);if(loc.index!==state.sceneIndex){state.sceneIndex=loc.index;state.selected=null;renderTimelineStrips();if(!item())renderInspector();}}
   function previewCamera(){
     const chosen=item();if(chosen?.type!=='camera')return;
-    pause();let local=0;for(const entry of scene().items){local+=Math.max(.1,num(entry.duration,1));if(entry.id===chosen.id)break;local+=Math.max(0,num(entry.pause));}
+    pause();const local=sceneSchedule(scene()).find(e=>e.it===chosen)?.end||0;
     state.previewCameraBox=cameraBox(chosen);state.time=clamp(sceneStart(state.sceneIndex)+local,0,totalLen());state.preview=true;renderStage();renderTimeline();
   }
   function seek(time){pause();state.previewCameraBox=null;state.time=clamp(time,0,totalLen());state.preview=true;renderStage();followPlayingScene();renderTimelineClock();}
@@ -1553,9 +1717,58 @@
   function stopPreview(){pause();state.preview=false;state.previewCameraBox=null;renderStage();}
   // Stop ends the preview and rewinds, so the next Play starts the video from the beginning.
   function stop(){state.time=0;stopPreview();renderTimeline();}
-  function openDb(){return new Promise((resolve,reject)=>{const req=indexedDB.open('whiteboard-studio',1);req.onupgradeneeded=()=>req.result.createObjectStore('projects',{keyPath:'id'});req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
+  // Automatic backups to a folder on this computer (File System Access API: Chrome and Edge). Each project is written to
+  // "<name> (<id>).json" a few seconds after it changes, with one dated copy a day in history/. The files use the
+  // regular backup format, so Import backup opens them. The folder handle is kept in the settings store.
+  const backup={folder:null,permission:'none',timer:0,last:0,error:''};
+  const backupSupported=()=>'showDirectoryPicker' in window;
+  function settingsTask(mode,fn){return new Promise((resolve,reject)=>{const tx=state.db.transaction('settings',mode),req=fn(tx.objectStore('settings'));req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
+  async function loadBackupFolder(){
+    try{const saved=await settingsTask('readonly',s=>s.get('backupFolder'));backup.folder=saved?.handle||null;backup.last=saved?.last||0;
+      backup.permission=backup.folder?await backup.folder.queryPermission({mode:'readwrite'}):'none';}catch(e){console.error(e);backup.folder=null;backup.permission='none';}
+    showBackupStatus();
+  }
+  async function rememberBackupFolder(){await settingsTask('readwrite',s=>s.put({key:'backupFolder',handle:backup.folder,last:backup.last}));}
+  async function chooseBackupFolder(){
+    if(!backupSupported()){toast('This browser cannot back up to a folder. Use Download backup instead.');return;}
+    try{backup.folder=await window.showDirectoryPicker({id:'whiteboard-backups',mode:'readwrite'});backup.permission='granted';await rememberBackupFolder();await backupAll();toast(`Backing up to “${backup.folder.name}”.`);}
+    catch(e){if(e.name!=='AbortError'){console.error(e);toast('That folder could not be used.');}}
+    if(!$('#modal').classList.contains('hidden'))showProjects();
+  }
+  async function reconnectBackupFolder(){
+    if(!backup.folder)return chooseBackupFolder();
+    try{backup.permission=await backup.folder.requestPermission({mode:'readwrite'});if(backup.permission==='granted'){await backupAll();toast('Backups are on again.');}}catch(e){console.error(e);}
+    showBackupStatus();
+  }
+  async function stopBackups(){backup.folder=null;backup.permission='none';await settingsTask('readwrite',s=>s.delete('backupFolder'));showBackupStatus();showProjects();}
+  const backupName=p=>`${safeFilename(p.name||'Untitled video')} (${String(p.id).slice(0,8)}).json`;
+  async function writeBackup(p){
+    const text=JSON.stringify({format:'whiteboard-studio-backup',version:1,exportedAt:new Date().toISOString(),projects:[storedProject(p)]});
+    const put=async(dir,name)=>{const file=await dir.getFileHandle(name,{create:true}),w=await file.createWritable();await w.write(text);await w.close();};
+    await put(backup.folder,backupName(p));
+    await put(await backup.folder.getDirectoryHandle('history',{create:true}),backupName(p).replace(/\.json$/,` ${new Date().toISOString().slice(0,10)}.json`));
+  }
+  async function backupAll(){if(backup.permission!=='granted')return;for(const p of await listProjects())await writeBackup(p);backup.last=Date.now();backup.error='';await rememberBackupFolder();showBackupStatus();}
+  // Called after every save; writes the open project once things have been quiet for a few seconds.
+  function scheduleBackup(){
+    if(!backup.folder||backup.permission!=='granted')return;clearTimeout(backup.timer);
+    backup.timer=setTimeout(async()=>{try{await writeBackup(state.project);backup.last=Date.now();backup.error='';await rememberBackupFolder();}catch(e){console.error(e);backup.error='Backup failed';if(e.name==='NotAllowedError')backup.permission='prompt';}showBackupStatus();},4000);
+  }
+  function showBackupStatus(){
+    const el=$('#backupStatus');if(!el)return;
+    if(backup.folder&&backup.permission==='granted'){el.className='backup-status ok';el.textContent=backup.error||(backup.last?`Backed up ${new Date(backup.last).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`:'Backups on');el.title=`Backing up to the “${backup.folder.name}” folder`;}
+    else if(backup.folder){el.className='backup-status warn';el.textContent='Reconnect backups';el.title='Click to let the app keep writing backups to your folder';}
+    else{el.className='backup-status warn';el.textContent='Not backed up';el.title='Projects live only in this browser. Set up a backup folder in My projects.';}
+  }
+  function backupPanel(){
+    if(!backupSupported())return `<div class="note-card">This browser cannot back up to a folder automatically. Use <strong>Download backup</strong> regularly, or open the app in Chrome or Edge for automatic backups.</div>`;
+    if(!backup.folder)return `<div class="backup-card"><strong>Automatic backup</strong><span>Keep a copy of every project in a folder on this computer, updated as you work.</span><button class="button primary small" data-backup="choose">Choose backup folder</button></div>`;
+    return `<div class="backup-card ok"><strong>Automatic backup ${backup.permission==='granted'?'on':'paused'}</strong><span>Folder “${esc(backup.folder.name)}”${backup.last?` · last backup ${new Date(backup.last).toLocaleString()}`:''}. A dated copy is kept each day in its history folder.</span><span class="backup-actions">${backup.permission==='granted'?'<button class="panel-action" data-backup="now">Back up now</button>':'<button class="button primary small" data-backup="reconnect">Reconnect folder</button>'}<button class="panel-action" data-backup="choose">Change folder</button><button class="panel-action danger" data-backup="stop">Stop</button></span></div>`;
+  }
+  // Version 2 adds a settings store (the backup folder) beside the projects.
+  function openDb(){return new Promise((resolve,reject)=>{const req=indexedDB.open('whiteboard-studio',2);req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains('projects'))db.createObjectStore('projects',{keyPath:'id'});if(!db.objectStoreNames.contains('settings'))db.createObjectStore('settings',{keyPath:'key'});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
   function dbTask(mode,fn){return new Promise((resolve,reject)=>{const tx=state.db.transaction('projects',mode),store=tx.objectStore('projects');let req=fn(store);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
-  async function saveProject(){try{await dbTask('readwrite',s=>s.put(storedProject(state.project)));localStorage.setItem('whiteboard-current',state.project.id);$('#saveStatus').textContent='Saved locally';}catch(e){$('#saveStatus').textContent='Could not save';toast('This project could not be saved. Check your browser storage.');}}
+  async function saveProject(){try{await dbTask('readwrite',s=>s.put(storedProject(state.project)));localStorage.setItem('whiteboard-current',state.project.id);$('#saveStatus').textContent='Saved locally';scheduleBackup();}catch(e){$('#saveStatus').textContent='Could not save';toast('This project could not be saved. Check your browser storage.');}}
   async function migrateProject(p){
     p.audioFiles=p.audioFiles||{};p.audioClips=p.audioClips||[];
     if(p.audio?.src){const file=id();p.audioFiles[file]={name:p.audio.name||'Audio',src:p.audio.src,duration:null};p.audioClips.push({id:id(),file,lane:0,start:0,offset:0,length:null,volume:1,fadeIn:0,fadeOut:0});}
@@ -1603,7 +1816,7 @@
     }
     toast(`${p.name} deleted.`);await showProjects();
   }
-  async function showProjects(){await saveProject();const projects=await listProjects();modal(`<div class="modal-top"><h2>My projects</h2><button class="close-button" data-modal="close">×</button></div><p class="panel-help">Projects are saved in this browser. Download a backup to move them to another browser or computer.</p>${projects.map(p=>`<div class="project-card"><span class="scene-number">✎</span><span><strong>${esc(p.name)}</strong><small>${p.scenes.length} scene${p.scenes.length===1?'':'s'} · ${new Date(p.updated).toLocaleDateString()}${projectHint(p)?` · “${esc(projectHint(p))}”`:''}</small></span><button class="panel-action" data-open="${esc(p.id)}">Open</button><button class="panel-action danger" data-delete-project="${esc(p.id)}">Delete</button></div>`).join('')}<div class="modal-foot"><button class="button ghost" data-modal="backup">Download backup</button><button class="button ghost" data-modal="import">Import backup</button><button class="button primary" data-modal="new">+ New project</button></div>`);}
+  async function showProjects(){await saveProject();const projects=await listProjects();modal(`<div class="modal-top"><h2>My projects</h2><button class="close-button" data-modal="close">×</button></div><p class="panel-help">Projects are saved in this browser. Download a backup to move them to another browser or computer.</p>${backupPanel()}${projects.map(p=>`<div class="project-card"><span class="scene-number">✎</span><span><strong>${esc(p.name)}</strong><small>${p.scenes.length} scene${p.scenes.length===1?'':'s'} · ${new Date(p.updated).toLocaleDateString()}${projectHint(p)?` · “${esc(projectHint(p))}”`:''}</small></span><button class="panel-action" data-open="${esc(p.id)}">Open</button><button class="panel-action danger" data-delete-project="${esc(p.id)}">Delete</button></div>`).join('')}<div class="modal-foot"><button class="button ghost" data-modal="backup">Download backup</button><button class="button ghost" data-modal="import">Import backup</button><button class="button primary" data-modal="new">+ New project</button></div>`);}
   async function downloadProjectBackup(){
     await saveProject();const projects=await listProjects();
     const backup={format:'whiteboard-studio-backup',version:1,exportedAt:new Date().toISOString(),projects};
@@ -1641,7 +1854,7 @@
   // into an MP4 written by mp4-muxer (vendor/mp4-muxer, MIT). The file has its index at the start and a keyframe every
   // two seconds, so it plays and scrubs in any player. The audio clips are mixed offline into the same file.
   const EXPORT_SIZES=[['720','720p'],['1080','1080p (Full HD)'],['1440','1440p'],['2160','4K']],EXPORT_QUALITY=[['standard','Standard',.07],['high','High',.12],['max','Maximum',.2]];
-  const exportPrefs={size:'1080',fps:30,quality:'high',range:'all',audio:true};
+  const exportPrefs={size:'1080',fps:30,quality:'high',range:'all',audio:true,captions:'none'};
   function exportDimensions(size){const n=+size,r=state.project.ratio;return r==='1:1'?[n,n]:r==='9:16'?[n,Math.round(n*16/9/2)*2]:[Math.round(n*16/9/2)*2,n];}
   function exportRange(range){return range==='scene'?[sceneStart(state.sceneIndex),sceneStart(state.sceneIndex)+sceneLen(scene())]:[0,totalLen()];}
   function exportBitrate(o){const [w,h]=exportDimensions(o.size);return Math.round(w*h*o.fps*(EXPORT_QUALITY.find(q=>q[0]===o.quality)?.[2]||.12));}
@@ -1660,6 +1873,7 @@
       <div class="field-row"><div class="field"><label>Resolution</label>${pick('size',EXPORT_SIZES)}</div><div class="field"><label>Frame rate</label>${pick('fps',[[24,'24 fps (film)'],[30,'30 fps'],[60,'60 fps (smoothest)']])}</div></div>
       <div class="field-row"><div class="field"><label>Quality</label>${pick('quality',EXPORT_QUALITY)}</div><div class="field"><label>Range</label>${pick('range',[['all','Whole video'],['scene',`This scene (${esc(scene().name)})`]])}</div></div>
       <label class="check-row"><input type="checkbox" data-export="audio" ${o.audio?'checked':''} ${hasAudio()?'':'disabled'}> Include audio${hasAudio()?'':' (no audio clips yet)'}</label>
+      <div class="field"><label>Captions${captionCues().length?'':' (made from narration scripts; none yet)'}</label>${captionCues().length?pick('captions',[['none','None'],['srt','Subtitle file (.srt)'],['burn','Burned into the video'],['both','Both']]):'<select disabled><option>None</option></select>'}</div>
       <p id="exportSummary" class="lib-count">${exportSummary()}</p>
       <div class="modal-foot"><button class="button ghost" data-modal="close">Cancel</button><button class="button primary" data-export-start>Export MP4</button></div>`);
   }
@@ -1671,6 +1885,7 @@
   async function exportVideo(){
     const o={...exportPrefs},name=safeFilename($('#exportName')?.value||state.project.name);
     if(!window.VideoEncoder){recordVideoRealtime(name);return;}
+    const cues=captionCues(),burn=(o.captions==='burn'||o.captions==='both')&&cues.length,srt=(o.captions==='srt'||o.captions==='both')&&cues.length;
     const [w,h]=exportDimensions(o.size),[t0,t1]=exportRange(o.range),fps=+o.fps,frames=Math.max(1,Math.ceil((t1-t0)*fps)),bitrate=exportBitrate(o),withAudio=o.audio&&hasAudio();
     const codecs=[avcCodec([w,h],fps),'avc1.4d0034','avc1.640034'],configs=codecs.map(codec=>({codec,width:w,height:h,bitrate,framerate:fps,avc:{format:'avc'},latencyMode:'quality'}));
     let config=null;for(const c of configs){try{if((await VideoEncoder.isConfigSupported(c)).supported){config=c;break;}}catch{}}
@@ -1689,7 +1904,7 @@
       const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d',{alpha:false}),started=performance.now();
       for(let i=0;i<frames;i++){
         if(state.exportCancelled)throw new Error('cancelled');if(failure)throw failure;
-        ctx.fillStyle='#ffffff';ctx.fillRect(0,0,w,h);await paintSvg(ctx,Math.min(t1,t0+i/fps));
+        ctx.fillStyle='#ffffff';ctx.fillRect(0,0,w,h);await paintSvg(ctx,Math.min(t1,t0+i/fps));if(burn)drawCaption(ctx,cues,Math.min(t1,t0+i/fps));
         const frame=new VideoFrame(canvas,{timestamp:Math.round(i*1e6/fps),duration:Math.round(1e6/fps)});videoEncoder.encode(frame,{keyFrame:i%(fps*2)===0});frame.close();
         while(videoEncoder.encodeQueueSize>6)await new Promise(r=>setTimeout(r,4));
         if(i%3===0||i===frames-1){const done=(i+1)/frames,left=(performance.now()-started)/done*(1-done)/1000;bar(done*(audioCodec?.92:1));status(`Frame ${i+1} of ${frames} · about ${left<60?Math.ceil(left)+' s':Math.ceil(left/60)+' min'} left`);}
@@ -1703,7 +1918,9 @@
         await audioEncoder.flush();if(failure)throw failure;bar(1);
       }else if(withAudio)toast('This browser cannot encode audio, so the video was exported without sound.');
       status('Finishing the file…');muxer.finalize();
-      download(new Blob([target.buffer],{type:'video/mp4'}),`${name}.mp4`);closeModal();toast(`Exported ${name}.mp4`);
+      download(new Blob([target.buffer],{type:'video/mp4'}),`${name}.mp4`);
+      if(srt)download(new Blob([srtText(cues.filter(c=>c.end>t0&&c.start<t1).map(c=>({...c,start:Math.max(c.start,t0),end:Math.min(c.end,t1)})),t0)],{type:'application/x-subrip'}),`${name}.srt`);
+      closeModal();toast(`Exported ${name}.mp4${srt?' and its captions':''}`);
     }catch(e){closeModal();if(e?.message==='cancelled')toast('Export cancelled.');else{console.error(e);toast(`Export failed: ${e?.message||e}`);}}
     finally{try{videoEncoder?.state!=='closed'&&videoEncoder?.close();}catch{}try{audioEncoder?.state!=='closed'&&audioEncoder?.close();}catch{}state.exporting=false;}
   }
@@ -1942,6 +2159,7 @@
     const it=item(),target=['sceneName','background'].includes(key)?scene():it;if(!target)return;
     if(key==='sceneName')target.name=value.slice(0,80)||'Scene';
     else if(key==='rotation')target.rotation=((num(value,0)+180)%360+360)%360-180;
+    else if(key==='delay')target.delay=clamp(num(value,0),0,60);
     else if(['x','y','w','h','fontSize','duration','pause','zoom','cx','cy'].includes(key)){
       const n=num(value,target[key]);target[key]=key==='duration'?clamp(n,.1,60):key==='pause'?clamp(n,0,60):key==='zoom'?clamp(n,.2,5):key==='w'||key==='h'?clamp(n,10,30000):key==='fontSize'?clamp(n,16,180):n;
     }else target[key]=value;
@@ -1956,6 +2174,8 @@
     if(name==='preview-script'){const text=String(scene().script||'').trim();if(text)previewVoice(text,'script');else toast('Write a script for this scene first.');return;}
     if(name==='preview-voice'){const label=(VOICES.find(v=>v[0]===voiceSettings().voice)?.[1]||'').split(' · ')[0];previewVoice(`Hello, I'm ${label}. This is how I sound telling your story.`,'voice');return;}
     if(name==='narrate-all'){narrateAll();return;}
+    if(name==='retime'){retimeScene(scene());return;}
+    const several=selectedItems().filter(x=>x.type!=='camera');if(several.length>1&&(name==='delete'||name==='duplicate')){name==='delete'?deleteItems(several):duplicateItems(several);return;}
     if(!it)return;
     if(name==='rotate-reset'){snapshot();it.rotation=0;changed();return;}
     const index=items.findIndex(x=>x.id===it.id);snapshot();
@@ -1994,7 +2214,7 @@
   }
   function bind(){
     document.querySelectorAll('.tool').forEach(b=>b.addEventListener('click',()=>{stopPreview();state.tool=b.dataset.tool;state.selected=null;if(state.tool==='text')addText();else if(state.tool==='upload')$('#uploadInput').click();else if(state.tool==='camera')addCamera();else{renderAll();}}));
-    $('#inspector').addEventListener('click',e=>{const icon=e.target.closest('[data-icon]'),sheet=e.target.closest('[data-sheet-item]'),shape=e.target.closest('[data-shape]'),ratio=e.target.closest('[data-ratio]'),align=e.target.closest('[data-align]'),act=e.target.closest('[data-action]');if(align){const it=item();if(it?.type==='text'&&(it.align||'left')!==align.dataset.align){snapshot();it.align=align.dataset.align;scheduleHandwriting(it);changed();}}const font=e.target.closest('[data-font]');if(font){const it=item();if(it?.type==='text'&&it.font!==font.dataset.font){snapshot();applyField('font',font.dataset.font);renderInspector();}return;}const tab=e.target.closest('[data-lib-tab]'),art=e.target.closest('[data-art]'),tabler=e.target.closest('[data-tabler]'),tone=e.target.closest('[data-lib-tone]'),color=e.target.closest('[data-peep-color]');
+    $('#inspector').addEventListener('click',e=>{const icon=e.target.closest('[data-icon]'),sheet=e.target.closest('[data-sheet-item]'),shape=e.target.closest('[data-shape]'),ratio=e.target.closest('[data-ratio]'),align=e.target.closest('[data-align]'),act=e.target.closest('[data-action]');if(align){const it=item();if(it?.type==='text'&&(it.align||'left')!==align.dataset.align){snapshot();it.align=align.dataset.align;scheduleHandwriting(it);changed();}}const startMode=e.target.closest('[data-start-mode]');if(startMode){const it=item();if(it&&!!it.withPrevious!==(startMode.dataset.startMode==='with')){snapshot();it.withPrevious=startMode.dataset.startMode==='with';changed();}return;}const font=e.target.closest('[data-font]');if(font){const it=item();if(it?.type==='text'&&it.font!==font.dataset.font){snapshot();applyField('font',font.dataset.font);renderInspector();}return;}const tab=e.target.closest('[data-lib-tab]'),art=e.target.closest('[data-art]'),tabler=e.target.closest('[data-tabler]'),tone=e.target.closest('[data-lib-tone]'),color=e.target.closest('[data-peep-color]');
       if(tab&&library.tab!==tab.dataset.libTab){library.tab=tab.dataset.libTab;library.category='all';library.limit=LIBRARY_PAGE;renderInspector();}
       if(e.target.closest('[data-lib-more]')){library.limit+=LIBRARY_PAGE;showLibraryResults();}
       if(tone){library.tone=tone.dataset.libTone;document.querySelectorAll('[data-lib-tone]').forEach(b=>b.classList.toggle('active',b===tone));showLibraryResults();}
@@ -2010,13 +2230,20 @@
       if(state.preview||e.button>1)return;
       if(state.tool==='pan'||e.button===1){state.drag={mode:'pan',clientX:e.clientX,clientY:e.clientY,view:{...state.editorView}};$('#stage').setPointerCapture(e.pointerId);return;}
       const hit=e.target.closest('[data-item]'),handle=e.target.closest('[data-handle]');
-      if(hit){const it=scene().items.find(x=>x.id===hit.dataset.item);if(!it)return;if(state.selected!==it.id)selectItem(it.id);const p=pointOnStage(e),turn=handle?.dataset.handle==='rotate';snapshot();state.drag={mode:turn?'rotate':handle?'resize':'move',id:it.id,handle:handle?.dataset.handle,start:p,box:it.type==='camera'?cameraBox(it):[it.x,it.y,it.w,it.h],bounds:boundsOf(it),targets:it.type==='camera'?null:snapTargets(it.id),center:it.type==='camera'?null:centerOf(it),startAngle:it.type==='camera'?0:Math.atan2(p.y-it.y-it.h/2,p.x-it.x-it.w/2),original:it.type==='camera'?{cx:it.cx,cy:it.cy,zoom:it.zoom}:{x:it.x,y:it.y,w:it.w,h:it.h,rotation:rotationOf(it)}};$('#stage').setPointerCapture(e.pointerId);}
-      else if(state.selected){state.selected=null;renderAll();}
+      if(hit){const it=scene().items.find(x=>x.id===hit.dataset.item);if(!it)return;
+        // Shift or Ctrl adds an item to the selection or takes it out.
+        if((e.shiftKey||e.ctrlKey||e.metaKey)&&!handle&&it.type!=='camera'){const ids=selectionIds().filter(i=>scene().items.find(x=>x.id===i)?.type!=='camera');setSelection(ids.includes(it.id)?ids.filter(i=>i!==it.id):[...ids,it.id]);return;}
+        const together=!handle&&selectionIds().length>1&&selectionIds().includes(it.id);
+        if(!together&&state.selected!==it.id)selectItem(it.id);const p=pointOnStage(e),turn=handle?.dataset.handle==='rotate';snapshot();state.drag={mode:turn?'rotate':handle?'resize':'move',id:it.id,handle:handle?.dataset.handle,start:p,box:it.type==='camera'?cameraBox(it):[it.x,it.y,it.w,it.h],bounds:boundsOf(it),targets:it.type==='camera'?null:snapTargets(it.id),center:it.type==='camera'?null:centerOf(it),startAngle:it.type==='camera'?0:Math.atan2(p.y-it.y-it.h/2,p.x-it.x-it.w/2),...(together?{group:selectedItems().map(g=>({it:g,x:g.x,y:g.y})),bounds:unionBox(selectedItems()),targets:snapTargets(selectionIds())}:{}),original:it.type==='camera'?{cx:it.cx,cy:it.cy,zoom:it.zoom}:{x:it.x,y:it.y,w:it.w,h:it.h,rotation:rotationOf(it)}};$('#stage').setPointerCapture(e.pointerId);}
+      // Dragging on empty canvas draws a selection box; a plain click clears the selection.
+      else if(state.tool==='select'&&e.button===0){state.drag={mode:'marquee',start:pointOnStage(e),add:e.shiftKey,moved:false};$('#stage').setPointerCapture(e.pointerId);}
+      else if(state.selected){state.selected=null;state.multi=[];renderAll();}
     });
     $('#stage').addEventListener('pointermove',e=>{
       if(!state.drag)return;
       const drag=state.drag;
       if(drag.mode==='pan'){const units=drag.view.w/Math.max(1,$('#stage').clientWidth);state.editorView.cx=drag.view.cx-(e.clientX-drag.clientX)*units;state.editorView.cy=drag.view.cy-(e.clientY-drag.clientY)*units;renderStage();return;}
+      if(drag.mode==='marquee'){const p=pointOnStage(e),x=Math.min(p.x,drag.start.x),y=Math.min(p.y,drag.start.y),w=Math.abs(p.x-drag.start.x),h=Math.abs(p.y-drag.start.y);if(w/stageUnitsPerPixel()>4||h/stageUnitsPerPixel()>4){drag.moved=true;state.marquee=[x,y,w,h];renderStage();}return;}
       const it=scene().items.find(x=>x.id===drag.id);if(!it)return;const p=pointOnStage(e),dx=p.x-drag.start.x,dy=p.y-drag.start.y;
       drag.free=e.altKey;
       if(drag.mode==='rotate')rotateWithDrag(it,drag,p,e.shiftKey);
@@ -2025,29 +2252,37 @@
       else moveWithSnap(it,drag,dx,dy,e.altKey);
       renderStage();
     });
-    const endDrag=()=>{if(!state.drag)return;const wasPan=state.drag.mode==='pan',dragged=scene().items.find(x=>x.id===state.drag.id),resized=state.drag.mode==='resize';state.drag=null;state.guides=[];if(wasPan){saveEditorView();renderStage();}else{if(resized&&dragged?.type==='text')scheduleHandwriting(dragged);changed(false);renderInspector();}};$('#stage').addEventListener('pointerup',endDrag);$('#stage').addEventListener('pointercancel',endDrag);
-    bindTimeline();bindAudio();bindEditing();
+    const endDrag=()=>{if(!state.drag)return;
+      if(state.drag.mode==='marquee'){const drag=state.drag,box=state.marquee;state.drag=null;state.marquee=null;
+        if(!drag.moved){if(state.selected||state.multi?.length){state.selected=null;state.multi=[];renderAll();}else renderStage();return;}
+        const hits=scene().items.filter(it=>{if(it.type==='camera')return false;const b=boundsOf(it);return b[0]<box[0]+box[2]&&b[0]+b[2]>box[0]&&b[1]<box[1]+box[3]&&b[1]+b[3]>box[1];}).map(it=>it.id);
+        setSelection(drag.add?[...new Set([...selectionIds(),...hits])]:hits);return;}const wasPan=state.drag.mode==='pan',dragged=scene().items.find(x=>x.id===state.drag.id),resized=state.drag.mode==='resize';state.drag=null;state.guides=[];if(wasPan){saveEditorView();renderStage();}else{if(resized&&dragged?.type==='text')scheduleHandwriting(dragged);changed(false);renderInspector();}};$('#stage').addEventListener('pointerup',endDrag);$('#stage').addEventListener('pointercancel',endDrag);
+    bindTimeline();bindAudio();bindEditing();bindArrange();
     $('#projectName').addEventListener('focus',()=>snapshot());$('#projectName').addEventListener('input',e=>{state.project.name=e.target.value.slice(0,80);changed(false);});
     $('#addSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();state.project.scenes.push({id:id(),name:`Scene ${state.project.scenes.length+1}`,background:'#ffffff',items:[]});state.sceneIndex=state.project.scenes.length-1;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
     $('#duplicateSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();const copy=clone(scene());copy.id=id();copy.name+=` copy`;copy.items.forEach(x=>x.id=id());state.project.scenes.splice(state.sceneIndex+1,0,copy);state.sceneIndex++;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
     $('#playBtn').addEventListener('click',play);$('#previewBtn').addEventListener('click',()=>{if(state.playing)pause();else play();});$('#restartBtn').addEventListener('click',()=>seek(0));$('#stopBtn').addEventListener('click',stop);$('#topStopBtn').addEventListener('click',stop);$('#fitBtn').addEventListener('click',fitContent);$('#snapBtn').addEventListener('click',e=>{stageSnap=!stageSnap;e.currentTarget.classList.toggle('active',stageSnap);toast(stageSnap?'Snapping on. Hold Alt while dragging to move freely.':'Snapping off.');});$('#zoomInBtn').addEventListener('click',()=>zoomEditor(.8));$('#zoomOutBtn').addEventListener('click',()=>zoomEditor(1.25));
-    $('#scrubber').addEventListener('input',e=>seek(+e.target.value/1000*totalLen()));$('#exportBtn').addEventListener('click',showExportOptions);$('#projectsBtn').addEventListener('click',showProjects);
+    $('#scrubber').addEventListener('input',e=>seek(+e.target.value/1000*totalLen()));$('#exportBtn').addEventListener('click',showExportOptions);$('#projectsBtn').addEventListener('click',showProjects);$('#backupStatus').addEventListener('click',()=>{if(backup.folder&&backup.permission!=='granted')reconnectBackupFolder();else showProjects();});
     $('#uploadInput').addEventListener('change',async e=>{await uploadImage(e.target.files[0]);e.target.value='';});$('#audioInput').addEventListener('change',async e=>{await uploadAudio(e.target.files[0],state.audioLane??0);e.target.value='';});$('#projectBackupInput').addEventListener('change',async e=>{await importProjectBackup(e.target.files[0]);e.target.value='';});
     $('#modal').addEventListener('change',e=>{const f=e.target.closest('[data-export]');if(!f)return;exportPrefs[f.dataset.export]=f.type==='checkbox'?f.checked:f.dataset.export==='fps'?+f.value:f.value;const sum=$('#exportSummary');if(sum)sum.textContent=exportSummary();});
-    $('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){if(!state.exporting)closeModal();return;}if(e.target.closest('[data-export-start]')){exportVideo();return;}if(e.target.closest('[data-export-cancel]')){state.exportCancelled=true;const s=$('#exportStatus');if(s)s.textContent='Cancelling…';return;}const b=e.target.closest('[data-modal],[data-open],[data-delete-project]');if(!b)return;if(b.dataset.deleteProject)deleteProject(b.dataset.deleteProject);else if(b.dataset.open)loadProject(b.dataset.open);else if(b.dataset.modal==='close'&&!state.exporting)closeModal();else if(b.dataset.modal==='new')showNewProject();else if(b.dataset.modal==='create')createProject();else if(b.dataset.modal==='backup')downloadProjectBackup();else if(b.dataset.modal==='import')$('#projectBackupInput').click();});
+    $('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){if(!state.exporting)closeModal();return;}const bk=e.target.closest('[data-backup]');if(bk){const a=bk.dataset.backup;if(a==='choose')chooseBackupFolder();if(a==='reconnect')reconnectBackupFolder().then(showProjects);if(a==='stop')stopBackups();if(a==='now')backupAll().then(()=>{toast('All projects backed up.');showProjects();}).catch(err=>{console.error(err);toast('Backup failed.');});return;}if(e.target.closest('[data-export-start]')){exportVideo();return;}if(e.target.closest('[data-export-cancel]')){state.exportCancelled=true;const s=$('#exportStatus');if(s)s.textContent='Cancelling…';return;}const b=e.target.closest('[data-modal],[data-open],[data-delete-project]');if(!b)return;if(b.dataset.deleteProject)deleteProject(b.dataset.deleteProject);else if(b.dataset.open)loadProject(b.dataset.open);else if(b.dataset.modal==='close'&&!state.exporting)closeModal();else if(b.dataset.modal==='new')showNewProject();else if(b.dataset.modal==='create')createProject();else if(b.dataset.modal==='backup')downloadProjectBackup();else if(b.dataset.modal==='import')$('#projectBackupInput').click();});
     document.addEventListener('keydown',e=>{const typing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName),key=e.key.toLowerCase();
-      if(e.ctrlKey||e.metaKey){if(key==='z'&&!typing){e.preventDefault();e.shiftKey?redo():undo();return;}if(key==='y'&&!typing){e.preventDefault();redo();return;}if(key==='d'&&!typing){e.preventDefault();editAction('duplicate');}return;}
+      if(e.ctrlKey||e.metaKey){if(key==='z'&&!typing){e.preventDefault();e.shiftKey?redo():undo();return;}if(key==='y'&&!typing){e.preventDefault();redo();return;}if(key==='d'&&!typing){e.preventDefault();editAction('duplicate');}if(!typing&&key==='c'){copyItems(false);}if(!typing&&key==='x'){e.preventDefault();copyItems(true);}if(!typing&&key==='v'){e.preventDefault();pasteItems();}if(!typing&&key==='a'){e.preventDefault();setSelection(scene().items.map(x=>x.id));}if(!typing&&(e.key===']'||e.key===']'||e.code==='BracketRight')){e.preventDefault();arrangeItems(selectedItems(),e.shiftKey?'front':'forward');}if(!typing&&e.code==='BracketLeft'){e.preventDefault();arrangeItems(selectedItems(),e.shiftKey?'back':'backward');}return;}
       if(typing)return;if(e.altKey&&state.selected&&(e.key==='ArrowLeft'||e.key==='ArrowRight')){e.preventDefault();action(e.key==='ArrowLeft'?'back':'forward');return;}
       if(e.code==='Space'){e.preventDefault();play();return;}
+      if(!e.altKey&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){const step=e.shiftKey?10:1,[dx,dy]=e.key==='ArrowLeft'?[-step,0]:e.key==='ArrowRight'?[step,0]:e.key==='ArrowUp'?[0,-step]:[0,step];if(nudge(dx,dy)){e.preventDefault();return;}}
       if(key==='s'){e.preventDefault();editAction('split');return;}if(e.key==='['){e.preventDefault();editAction('trim-start');return;}if(e.key===']'){e.preventDefault();editAction('trim-end');return;}if(key==='c'){editAction('razor');return;}
-      if((e.key==='Delete'||e.key==='Backspace')&&state.selected){e.preventDefault();action('delete');}else if((e.key==='Delete'||e.key==='Backspace')&&state.selectedClip){e.preventDefault();clipAction('delete');}
-      if(e.key==='Escape'){closeClipMenu();if(state.razor)editAction('razor');else if(state.preview)stop();}});
+      if((e.key==='Delete'||e.key==='Backspace')&&(state.selected||state.multi?.length)){e.preventDefault();action('delete');}else if((e.key==='Delete'||e.key==='Backspace')&&state.selectedClip){e.preventDefault();clipAction('delete');}
+      if(e.key==='Escape'){closeClipMenu();if(state.razor)editAction('razor');else if(state.preview)stop();else if(state.selected||state.multi?.length){state.selected=null;state.multi=[];renderAll();}}});
     window.addEventListener('beforeunload',()=>{if(state.project)saveProject();});
   }
   async function init(){try{
     const fontResponse=await fetch('./assets/stroke-font.json');if(!fontResponse.ok)throw new Error('Writing font did not load');state.fonts=await fontResponse.json();
     const hand=new Image();hand.src=HAND.src;await hand.decode();state.handImage=hand;
-    state.db=await openDb();const current=localStorage.getItem('whiteboard-current');let p=current?await dbTask('readonly',s=>s.get(current)):null;if(!p){const all=await listProjects();p=all[0]||demoProject();}
+    state.db=await openDb();
+    // Ask the browser to keep this site's storage through automatic clean-ups.
+    try{await navigator.storage?.persist?.();}catch{}
+    await loadBackupFolder();const current=localStorage.getItem('whiteboard-current');let p=current?await dbTask('readonly',s=>s.get(current)):null;if(!p){const all=await listProjects();p=all[0]||demoProject();}
     state.project=await migrateProject(p);state.editorView=projectView(state.project);bind();new ResizeObserver(renderStage).observe($('#canvasShell'));renderAll();prepareHandwriting();prepareAudio();await saveProject();
   }catch(e){console.error(e);$('#inspector').innerHTML=`<h2 class="panel-title">Could not open the editor</h2><p class="panel-help">${esc(e.message)}. Reload the app to try again.</p>`;}}
   init();

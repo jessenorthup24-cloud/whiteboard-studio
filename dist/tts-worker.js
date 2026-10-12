@@ -1,6 +1,7 @@
 // Kokoro text-to-speech, run in a worker so the editor stays responsive. The model (Kokoro-82M, Apache 2.0) downloads
 // from Hugging Face on first use, about 92 MB in its 8-bit form, and the browser caches it for later visits.
-// Messages in: {id, text, voice, speed}. Out: {type:'progress', ...} while loading, then {id, type:'done', samples, rate}
+// Messages in: {id, text, voice, speed}. Out: {type:'progress', ...} while loading, then {id, type:'done', samples, rate,
+// sentences: [{text, start, end}] in seconds}
 // or {id, type:'error', message}.
 import { KokoroTTS } from 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js';
 
@@ -24,16 +25,18 @@ self.onmessage = async ({ data }) => {
     const tts = await model();
     self.postMessage({ type: 'progress', status: 'ready' });
     const parts = [], pieces = sentences(text);
+    const timings = [];
     let rate = 24000, total = 0;
     for (let i = 0; i < pieces.length; i++) {
       const audio = await tts.generate(pieces[i], { voice, speed });
-      rate = audio.sampling_rate; parts.push(audio.audio); total += audio.audio.length;
+      rate = audio.sampling_rate; timings.push({ text: pieces[i], start: total / rate, end: (total + audio.audio.length) / rate });
+      parts.push(audio.audio); total += audio.audio.length;
       if (i < pieces.length - 1) { const gap = new Float32Array(Math.round(rate * .28)); parts.push(gap); total += gap.length; }
       self.postMessage({ type: 'progress', status: 'speaking', done: i + 1, of: pieces.length });
     }
     const samples = new Float32Array(total);
     let at = 0; for (const p of parts) { samples.set(p, at); at += p.length; }
-    self.postMessage({ id, type: 'done', samples, rate }, [samples.buffer]);
+    self.postMessage({ id, type: 'done', samples, rate, sentences: timings }, [samples.buffer]);
   } catch (e) {
     self.postMessage({ id, type: 'error', message: String(e?.message || e) });
   }

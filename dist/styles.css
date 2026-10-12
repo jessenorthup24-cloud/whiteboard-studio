@@ -31,3 +31,8 @@
 .audio-editor.razor .audio-clip{cursor:crosshair}.clip-menu{position:fixed;z-index:50;background:#fff;border:1px solid #dde6e3;border-radius:9px;box-shadow:0 10px 24px #1b3a4b33;padding:4px;min-width:170px}.clip-menu button{display:block;width:100%;text-align:left;border:0;background:none;padding:7px 10px;border-radius:6px;font-size:12px;color:#203146;cursor:pointer}.clip-menu button:hover:not(:disabled){background:#fff5f1}.clip-menu button:disabled{color:#b6c0c5}
 @media(max-width:1100px){.tool-sep{display:none}.tool-chip{padding:3px 6px}.edit-tools{margin-left:8px;gap:3px}.timeline-title span{display:none}}
 .snap-toggle{opacity:.45}.snap-toggle.active{opacity:1;border-color:#f27a59;background:#fff5f1}
+.with-badge{color:#f27a59;font-weight:800}
+.retime-button{width:100%;margin:-4px 0 12px}
+.icon-row{display:flex;flex-wrap:wrap;gap:4px}.icon-action{padding:6px 8px;min-width:30px;font-size:12px}
+.backup-status{border:0;background:none;font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px;cursor:pointer;margin-left:6px}.backup-status.ok{color:#4f8f7d}.backup-status.warn{color:#c45a3d;background:#fff1ec}.backup-card{display:flex;flex-direction:column;gap:6px;border:1px solid #f2c9bb;background:#fff7f3;border-radius:11px;padding:12px;margin:0 0 12px;font-size:11px;color:#536273}.backup-card.ok{border-color:#cfe5dc;background:#f2faf6}.backup-card strong{font-size:12px;color:#203146}.backup-card .button{align-self:flex-start}.backup-actions{display:flex;flex-wrap:wrap;gap:6px}
+.save-row{display:flex;align-items:center;gap:2px}
