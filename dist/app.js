@@ -121,9 +121,67 @@
     let n=100;try{n=p.getTotalLength()}catch{}p.remove();lengthCache.set(d,n);return n;
   }
   let exportRender=false,exportHand=null;
+  // Rotation and snapping on the canvas. Items rotate about their centre (it.rotation, in degrees). While a rotated item
+  // is drawn, handRotation lets the hand land on the right point and stay upright.
+  const SNAP_PX=8;let stageSnap=true,handRotation=null;
+  const rotationOf=it=>it.type==='camera'?0:num(it.rotation,0)%360;
+  const centerOf=it=>[it.x+it.w/2,it.y+it.h/2];
+  function rotateVec([x,y],deg){const a=deg*Math.PI/180,c=Math.cos(a),s=Math.sin(a);return [x*c-y*s,x*s+y*c];}
+  function rotatePoint([x,y],[cx,cy],deg){const [rx,ry]=rotateVec([x-cx,y-cy],deg);return [cx+rx,cy+ry];}
+  // The upright box around an item as it appears on the canvas.
+  function boundsOf(it){
+    if(it.type==='camera')return cameraBox(it);const r=rotationOf(it);if(!r)return [it.x,it.y,it.w,it.h];
+    const c=centerOf(it),pts=[[it.x,it.y],[it.x+it.w,it.y],[it.x+it.w,it.y+it.h],[it.x,it.y+it.h]].map(p=>rotatePoint(p,c,r)),xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+    return [Math.min(...xs),Math.min(...ys),Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys)];
+  }
+  // Lines a moving item can snap to: the edges and centres of the other items, the camera frames and the video frame.
+  function snapTargets(except){
+    const xs=[],ys=[],add=([x,y,w,h])=>{for(const v of [x,x+w/2,x+w])xs.push({v,from:y,to:y+h});for(const v of [y,y+h/2,y+h])ys.push({v,from:x,to:x+w});};
+    add(baseBox());for(const it of scene().items)if(it.id!==except)add(boundsOf(it));
+    return {xs,ys};
+  }
+  const stageUnitsPerPixel=()=>editorBox()[2]/Math.max(1,$('#stage').clientWidth);
+  // The closest snap for a span [start, start+size] (its start, middle or end), within the snapping distance.
+  function nearestSnap(start,size,lines,tolerance,offsets=[0,size/2,size]){
+    let best=null;for(const off of offsets)for(const line of lines){const d=line.v-(start+off);if(Math.abs(d)<=tolerance&&(!best||Math.abs(d)<Math.abs(best.d)))best={d,line};}
+    return best;
+  }
+  function guideFor(axis,snap,from,to){return axis==='x'?{x1:snap.line.v,y1:Math.min(snap.line.from,from),x2:snap.line.v,y2:Math.max(snap.line.to,to)}:{x1:Math.min(snap.line.from,from),y1:snap.line.v,x2:Math.max(snap.line.to,to),y2:snap.line.v};}
+  function moveWithSnap(it,drag,dx,dy,free){
+    state.guides=[];let mx=dx,my=dy;
+    if(stageSnap&&!free){
+      const b=drag.bounds,tolerance=SNAP_PX*stageUnitsPerPixel(),sx=nearestSnap(b[0]+dx,b[2],drag.targets.xs,tolerance),sy=nearestSnap(b[1]+dy,b[3],drag.targets.ys,tolerance);
+      if(sx)mx+=sx.d;if(sy)my+=sy.d;
+      if(sx)state.guides.push(guideFor('x',sx,b[1]+my,b[1]+my+b[3]));if(sy)state.guides.push(guideFor('y',sy,b[0]+mx,b[0]+mx+b[2]));
+    }
+    it.x=Math.round((drag.original.x+mx)*10)/10;it.y=Math.round((drag.original.y+my)*10)/10;
+  }
+  // Dragging the rotate handle turns the item about its centre. It clicks into place near every 45 degrees; Shift
+  // keeps it to 15-degree steps.
+  function rotateWithDrag(it,drag,p,shift){
+    let angle=drag.original.rotation+(Math.atan2(p.y-drag.center[1],p.x-drag.center[0])-drag.startAngle)*180/Math.PI;
+    if(shift)angle=Math.round(angle/15)*15;else{const near=Math.round(angle/45)*45;if(Math.abs(angle-near)<4)angle=near;}
+    angle=((angle+180)%360+360)%360-180;it.rotation=Math.round(angle*10)/10;
+    $('#modeLabel').textContent=`Rotation ${Math.round(it.rotation)}°`;
+  }
+  function selectionMarkup(selected,frameBox){
+    const camera=selected.type==='camera',[x,y,w,h]=camera?cameraBox(selected):[selected.x,selected.y,selected.w,selected.h],r=camera?0:rotationOf(selected),[cx,cy]=[x+w/2,y+h/2];
+    const color=camera?'#318c79':'#f27a59',sw=Math.max(2,frameBox[2]/650),dot=Math.max(6,frameBox[2]/220),lift=Math.max(28,frameBox[2]/38);
+    let markup=`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-dasharray="${sw*3} ${sw*2}" pointer-events="none"/>`;
+    const handles={nw:[x,y],n:[x+w/2,y],ne:[x+w,y],e:[x+w,y+h/2],se:[x+w,y+h],s:[x+w/2,y+h],sw:[x,y+h],w:[x,y+h/2]};
+    for(const [name,[hx,hy]] of Object.entries(handles)){const cursor=name==='n'||name==='s'?'ns-resize':name==='e'||name==='w'?'ew-resize':name==='nw'||name==='se'?'nwse-resize':'nesw-resize';markup+=`<circle data-item="${esc(selected.id)}" data-handle="${name}" cx="${hx}" cy="${hy}" r="${dot}" fill="#ffffff" stroke="${color}" stroke-width="${sw}" style="cursor:${cursor}" pointer-events="all"/>`;}
+    if(!camera)markup+=`<path d="M${cx} ${y}V${y-lift}" stroke="${color}" stroke-width="${sw}" pointer-events="none"/><circle data-item="${esc(selected.id)}" data-handle="rotate" cx="${cx}" cy="${y-lift}" r="${dot*1.15}" fill="${color}" stroke="#ffffff" stroke-width="${sw}" style="cursor:grab" pointer-events="all"><title>Drag to rotate (Shift for 15° steps)</title></circle>`;
+    return r?`<g transform="rotate(${r} ${cx} ${cy})">${markup}</g>`:markup;
+  }
+  function guidesMarkup(frameBox){
+    const sw=Math.max(1.5,frameBox[2]/800);
+    return (state.guides||[]).map(g=>`<line x1="${g.x1}" y1="${g.y1}" x2="${g.x2}" y2="${g.y2}" stroke="#e84393" stroke-width="${sw}" stroke-dasharray="${sw*4} ${sw*3}" pointer-events="none"/>`).join('');
+  }
   function handMarkup(x,y){
-    if(exportRender){exportHand={x,y};return '';}
-    return `<image href="${HAND.src}" x="${x-HAND.x}" y="${y-HAND.y}" width="${HAND.w}" height="${HAND.h}" pointer-events="none"/>`;
+    const world=handRotation?rotatePoint([x,y],[handRotation.cx,handRotation.cy],handRotation.r):[x,y];
+    if(exportRender){exportHand={x:world[0],y:world[1]};return '';}
+    const image=`<image href="${HAND.src}" x="${x-HAND.x}" y="${y-HAND.y}" width="${HAND.w}" height="${HAND.h}" pointer-events="none"/>`;
+    return handRotation?`<g transform="rotate(${-handRotation.r} ${x} ${y})">${image}</g>`:image;
   }
   function sequenceMarkup(paths,progress,withHand){
     const strokes=paths.flatMap(p=>(p.d.match(/M[^M]*/g)||[p.d]).filter(Boolean).map(d=>({...p,d})));
@@ -265,11 +323,16 @@
     return `<defs><mask id="${maskId}" maskUnits="userSpaceOnUse" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}"><rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" fill="black"/>${drawn.markup}</mask></defs><g mask="url(#${maskId})">${body}</g>${drawn.hand}`;
   }
   function elementMarkup(it,progress=1,selectable=false,hand=false){
+    const r=rotationOf(it);if(!r)return drawElement(it,progress,selectable,hand);
+    const [cx,cy]=centerOf(it),outer=handRotation;handRotation={r,cx,cy};
+    try{return `<g transform="rotate(${r} ${cx} ${cy})">${drawElement(it,progress,selectable,hand)}</g>`;}finally{handRotation=outer;}
+  }
+  function drawElement(it,progress,selectable,hand){
     const attr=selectable?`data-item="${esc(it.id)}" style="cursor:move"`:'';
     const start=`<g ${attr}>`,hit=selectable?`<rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" fill="transparent" pointer-events="all"/>`:'',end='</g>';
     if(it.animation==='none')progress=1;
     if(progress<1&&['fade','slide','pop'].includes(it.animation)){
-      const full=elementMarkup(it,1,false,false),opacity=it.animation==='fade'?progress:1;
+      const full=drawElement(it,1,false,false),opacity=it.animation==='fade'?progress:1;
       const transform=it.animation==='slide'?`translate(${(1-progress)*-150} 0)`:it.animation==='pop'?`translate(${it.x+it.w/2} ${it.y+it.h/2}) scale(${.5+.5*progress}) translate(${-it.x-it.w/2} ${-it.y-it.h/2})`:'';
       return `<g ${attr} opacity="${opacity}" transform="${transform}">${full}</g>`;
     }
@@ -298,13 +361,8 @@
     }
     if(editing){
       const selected=item();
-      if(selected){
-        const [x,y,w,h]=selected.type==='camera'?cameraBox(selected):[selected.x,selected.y,selected.w,selected.h];
-        const color=selected.type==='camera'?'#318c79':'#f27a59',sw=Math.max(2,frameBox[2]/650),r=Math.max(6,frameBox[2]/220);
-        markup+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-dasharray="${sw*3} ${sw*2}" pointer-events="none"/>`;
-        const handles={nw:[x,y],n:[x+w/2,y],ne:[x+w,y],e:[x+w,y+h/2],se:[x+w,y+h],s:[x+w/2,y+h],sw:[x,y+h],w:[x,y+h/2]};
-        for(const [name,[hx,hy]] of Object.entries(handles)){const cursor=name==='n'||name==='s'?'ns-resize':name==='e'||name==='w'?'ew-resize':name==='nw'||name==='se'?'nwse-resize':'nesw-resize';markup+=`<circle data-item="${esc(selected.id)}" data-handle="${name}" cx="${hx}" cy="${hy}" r="${r}" fill="#ffffff" stroke="${color}" stroke-width="${sw}" style="cursor:${cursor}" pointer-events="all"/>`;}
-      }
+      if(selected)markup+=selectionMarkup(selected,frameBox);
+      markup+=guidesMarkup(frameBox);
     }
     return markup;
   }
@@ -813,7 +871,7 @@
         if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}<div class="field"><label>Align</label><div class="segmented">${[['left','⇤ Left'],['center','↔ Center'],['right','Right ⇥']].map(([v,n])=>`<button data-align="${v}" class="${(it.align||'left')===v?'active':''}" title="Align text ${v}">${n}</button>`).join('')}</div></div>${fontPicker(it)}`;
         if(it.type==='icon'||it.type==='text'||it.type==='vector')html+=field('Color','color',it.color||'#285d63','color');
         if(it.type==='shape')html+=`${selectField('Shape','shape',it.shape,[['round','Rounded rectangle'],['rect','Rectangle'],['circle','Ellipse']])}${field('Fill','fill',it.fill,'color')}`;
-        html+=`<div class="field-row">${field('X position','x',Math.round(it.x),'number','step="1"')}${field('Y position','y',Math.round(it.y),'number','step="1"')}</div><div class="field-row">${field('Width','w',Math.round(it.w),'number','min="10"')}${field('Height','h',Math.round(it.h),'number','min="10"')}</div>`;
+        html+=`<div class="field-row">${field('X position','x',Math.round(it.x),'number','step="1"')}${field('Y position','y',Math.round(it.y),'number','step="1"')}</div><div class="field-row">${field('Width','w',Math.round(it.w),'number','min="10"')}${field('Height','h',Math.round(it.h),'number','min="10"')}</div><div class="field-row">${field('Rotation (°)','rotation',Math.round(num(it.rotation)*10)/10,'number','min="-180" max="180" step="1"')}<div class="field"><label>&nbsp;</label><button class="panel-action" data-action="rotate-reset" ${num(it.rotation)?'':'disabled'}>Straighten</button></div></div>`;
         html+=selectField('Entrance','animation',it.animation==='reveal'?'draw':it.animation,[['draw','Hand draw'],['fade','Fade in'],['slide','Slide in'],['pop','Pop in'],['none','Appear']]);
         if(it.type==='image'&&it.character)html+=characterFaceField(it);
         if(it.type==='image')html+=`<div class="note-card">${it.illustration?'The marker draws the line work first, then colors in each area. Transparent areas stay clear.':'The marker traces visible contours and fills only visible artwork. Transparent areas stay clear.'}</div>`;
@@ -1883,6 +1941,7 @@
   function applyField(key,value){
     const it=item(),target=['sceneName','background'].includes(key)?scene():it;if(!target)return;
     if(key==='sceneName')target.name=value.slice(0,80)||'Scene';
+    else if(key==='rotation')target.rotation=((num(value,0)+180)%360+360)%360-180;
     else if(['x','y','w','h','fontSize','duration','pause','zoom','cx','cy'].includes(key)){
       const n=num(value,target[key]);target[key]=key==='duration'?clamp(n,.1,60):key==='pause'?clamp(n,0,60):key==='zoom'?clamp(n,.2,5):key==='w'||key==='h'?clamp(n,10,30000):key==='fontSize'?clamp(n,16,180):n;
     }else target[key]=value;
@@ -1898,6 +1957,7 @@
     if(name==='preview-voice'){const label=(VOICES.find(v=>v[0]===voiceSettings().voice)?.[1]||'').split(' · ')[0];previewVoice(`Hello, I'm ${label}. This is how I sound telling your story.`,'voice');return;}
     if(name==='narrate-all'){narrateAll();return;}
     if(!it)return;
+    if(name==='rotate-reset'){snapshot();it.rotation=0;changed();return;}
     const index=items.findIndex(x=>x.id===it.id);snapshot();
     if(name==='delete'){items.splice(index,1);state.selected=null;}
     if(name==='duplicate'){const copy=clone(it);copy.id=id();if(copy.x!=null){copy.x+=35;copy.y+=35;}items.splice(index+1,0,copy);state.selected=copy.id;}
@@ -1913,11 +1973,23 @@
       const factor=wide!==null&&tall!==null?(Math.abs(wide-1)>=Math.abs(tall-1)?wide:tall):(wide??tall);
       it.zoom=clamp(drag.original.zoom/Math.max(.05,factor),.2,5);return;
     }
+    const r=num(drag.original.rotation,0),[ldx,ldy]=r?rotateVec([dx,dy],-r):[dx,dy];
     let left=drag.box[0],top=drag.box[1],right=left+drag.box[2],bottom=top+drag.box[3];
-    if(handle.includes('w'))left=Math.min(right-20,left+dx);
-    if(handle.includes('e'))right=Math.max(left+20,right+dx);
-    if(handle.includes('n'))top=Math.min(bottom-20,top+dy);
-    if(handle.includes('s'))bottom=Math.max(top+20,bottom+dy);
+    if(handle.includes('w'))left=Math.min(right-20,left+ldx);
+    if(handle.includes('e'))right=Math.max(left+20,right+ldx);
+    if(handle.includes('n'))top=Math.min(bottom-20,top+ldy);
+    if(handle.includes('s'))bottom=Math.max(top+20,bottom+ldy);
+    state.guides=[];
+    if(!r&&stageSnap&&!drag.free&&drag.targets){
+      const tolerance=SNAP_PX*stageUnitsPerPixel(),edge=(v,lines)=>nearestSnap(v,0,lines,tolerance,[0]);
+      let snap;
+      if(handle.includes('w')&&(snap=edge(left,drag.targets.xs))){left=Math.min(right-20,left+snap.d);state.guides.push(guideFor('x',snap,top,bottom));}
+      if(handle.includes('e')&&(snap=edge(right,drag.targets.xs))){right=Math.max(left+20,right+snap.d);state.guides.push(guideFor('x',snap,top,bottom));}
+      if(handle.includes('n')&&(snap=edge(top,drag.targets.ys))){top=Math.min(bottom-20,top+snap.d);state.guides.push(guideFor('y',snap,left,right));}
+      if(handle.includes('s')&&(snap=edge(bottom,drag.targets.ys))){bottom=Math.max(top+20,bottom+snap.d);state.guides.push(guideFor('y',snap,left,right));}
+    }
+    if(r){const oc=[drag.box[0]+drag.box[2]/2,drag.box[1]+drag.box[3]/2],[sx,sy]=rotateVec([(left+right)/2-oc[0],(top+bottom)/2-oc[1]],r),w=right-left,h=bottom-top;
+      it.x=Math.round((oc[0]+sx-w/2)*10)/10;it.y=Math.round((oc[1]+sy-h/2)*10)/10;it.w=Math.round(w);it.h=Math.round(h);return;}
     it.x=Math.round(left);it.y=Math.round(top);it.w=Math.round(right-left);it.h=Math.round(bottom-top);
   }
   function bind(){
@@ -1938,7 +2010,7 @@
       if(state.preview||e.button>1)return;
       if(state.tool==='pan'||e.button===1){state.drag={mode:'pan',clientX:e.clientX,clientY:e.clientY,view:{...state.editorView}};$('#stage').setPointerCapture(e.pointerId);return;}
       const hit=e.target.closest('[data-item]'),handle=e.target.closest('[data-handle]');
-      if(hit){const it=scene().items.find(x=>x.id===hit.dataset.item);if(!it)return;if(state.selected!==it.id)selectItem(it.id);const p=pointOnStage(e);snapshot();state.drag={mode:handle?'resize':'move',id:it.id,handle:handle?.dataset.handle,start:p,box:it.type==='camera'?cameraBox(it):[it.x,it.y,it.w,it.h],original:it.type==='camera'?{cx:it.cx,cy:it.cy,zoom:it.zoom}:{x:it.x,y:it.y,w:it.w,h:it.h}};$('#stage').setPointerCapture(e.pointerId);}
+      if(hit){const it=scene().items.find(x=>x.id===hit.dataset.item);if(!it)return;if(state.selected!==it.id)selectItem(it.id);const p=pointOnStage(e),turn=handle?.dataset.handle==='rotate';snapshot();state.drag={mode:turn?'rotate':handle?'resize':'move',id:it.id,handle:handle?.dataset.handle,start:p,box:it.type==='camera'?cameraBox(it):[it.x,it.y,it.w,it.h],bounds:boundsOf(it),targets:it.type==='camera'?null:snapTargets(it.id),center:it.type==='camera'?null:centerOf(it),startAngle:it.type==='camera'?0:Math.atan2(p.y-it.y-it.h/2,p.x-it.x-it.w/2),original:it.type==='camera'?{cx:it.cx,cy:it.cy,zoom:it.zoom}:{x:it.x,y:it.y,w:it.w,h:it.h,rotation:rotationOf(it)}};$('#stage').setPointerCapture(e.pointerId);}
       else if(state.selected){state.selected=null;renderAll();}
     });
     $('#stage').addEventListener('pointermove',e=>{
@@ -1946,17 +2018,19 @@
       const drag=state.drag;
       if(drag.mode==='pan'){const units=drag.view.w/Math.max(1,$('#stage').clientWidth);state.editorView.cx=drag.view.cx-(e.clientX-drag.clientX)*units;state.editorView.cy=drag.view.cy-(e.clientY-drag.clientY)*units;renderStage();return;}
       const it=scene().items.find(x=>x.id===drag.id);if(!it)return;const p=pointOnStage(e),dx=p.x-drag.start.x,dy=p.y-drag.start.y;
-      if(drag.mode==='resize')resizeSelected(it,drag,dx,dy);
+      drag.free=e.altKey;
+      if(drag.mode==='rotate')rotateWithDrag(it,drag,p,e.shiftKey);
+      else if(drag.mode==='resize')resizeSelected(it,drag,dx,dy);
       else if(it.type==='camera'){it.cx=Math.round(drag.original.cx+dx);it.cy=Math.round(drag.original.cy+dy);}
-      else{it.x=Math.round(drag.original.x+dx);it.y=Math.round(drag.original.y+dy);}
+      else moveWithSnap(it,drag,dx,dy,e.altKey);
       renderStage();
     });
-    const endDrag=()=>{if(!state.drag)return;const wasPan=state.drag.mode==='pan',dragged=scene().items.find(x=>x.id===state.drag.id),resized=state.drag.mode==='resize';state.drag=null;if(wasPan){saveEditorView();renderStage();}else{if(resized&&dragged?.type==='text')scheduleHandwriting(dragged);changed(false);renderInspector();}};$('#stage').addEventListener('pointerup',endDrag);$('#stage').addEventListener('pointercancel',endDrag);
+    const endDrag=()=>{if(!state.drag)return;const wasPan=state.drag.mode==='pan',dragged=scene().items.find(x=>x.id===state.drag.id),resized=state.drag.mode==='resize';state.drag=null;state.guides=[];if(wasPan){saveEditorView();renderStage();}else{if(resized&&dragged?.type==='text')scheduleHandwriting(dragged);changed(false);renderInspector();}};$('#stage').addEventListener('pointerup',endDrag);$('#stage').addEventListener('pointercancel',endDrag);
     bindTimeline();bindAudio();bindEditing();
     $('#projectName').addEventListener('focus',()=>snapshot());$('#projectName').addEventListener('input',e=>{state.project.name=e.target.value.slice(0,80);changed(false);});
     $('#addSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();state.project.scenes.push({id:id(),name:`Scene ${state.project.scenes.length+1}`,background:'#ffffff',items:[]});state.sceneIndex=state.project.scenes.length-1;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
     $('#duplicateSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();const copy=clone(scene());copy.id=id();copy.name+=` copy`;copy.items.forEach(x=>x.id=id());state.project.scenes.splice(state.sceneIndex+1,0,copy);state.sceneIndex++;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
-    $('#playBtn').addEventListener('click',play);$('#previewBtn').addEventListener('click',()=>{if(state.playing)pause();else play();});$('#restartBtn').addEventListener('click',()=>seek(0));$('#stopBtn').addEventListener('click',stop);$('#topStopBtn').addEventListener('click',stop);$('#fitBtn').addEventListener('click',fitContent);$('#zoomInBtn').addEventListener('click',()=>zoomEditor(.8));$('#zoomOutBtn').addEventListener('click',()=>zoomEditor(1.25));
+    $('#playBtn').addEventListener('click',play);$('#previewBtn').addEventListener('click',()=>{if(state.playing)pause();else play();});$('#restartBtn').addEventListener('click',()=>seek(0));$('#stopBtn').addEventListener('click',stop);$('#topStopBtn').addEventListener('click',stop);$('#fitBtn').addEventListener('click',fitContent);$('#snapBtn').addEventListener('click',e=>{stageSnap=!stageSnap;e.currentTarget.classList.toggle('active',stageSnap);toast(stageSnap?'Snapping on. Hold Alt while dragging to move freely.':'Snapping off.');});$('#zoomInBtn').addEventListener('click',()=>zoomEditor(.8));$('#zoomOutBtn').addEventListener('click',()=>zoomEditor(1.25));
     $('#scrubber').addEventListener('input',e=>seek(+e.target.value/1000*totalLen()));$('#exportBtn').addEventListener('click',showExportOptions);$('#projectsBtn').addEventListener('click',showProjects);
     $('#uploadInput').addEventListener('change',async e=>{await uploadImage(e.target.files[0]);e.target.value='';});$('#audioInput').addEventListener('change',async e=>{await uploadAudio(e.target.files[0],state.audioLane??0);e.target.value='';});$('#projectBackupInput').addEventListener('change',async e=>{await importProjectBackup(e.target.files[0]);e.target.value='';});
     $('#modal').addEventListener('change',e=>{const f=e.target.closest('[data-export]');if(!f)return;exportPrefs[f.dataset.export]=f.type==='checkbox'?f.checked:f.dataset.export==='fps'?+f.value:f.value;const sum=$('#exportSummary');if(sum)sum.textContent=exportSummary();});
