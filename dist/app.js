@@ -134,8 +134,8 @@
     const font=state.fonts?.[it.font]||state.fonts?.futural;if(!font)return [];
     const glyph=c=>font.chars[(c.charCodeAt(0)>=33&&c.charCodeAt(0)<=127?c.charCodeAt(0):63)-33];
     const rows=String(it.text||'Text').split('\n').slice(0,6),advance=c=>/\s/u.test(c)?12:(glyph(c)?.o||10)*1.68;
-    const scale=it.fontSize/23,maxWidth=Math.max(1,...rows.map(row=>[...row].reduce((a,c)=>a+advance(c),0))),fit=Math.min(1,it.w/(maxWidth*scale));
-    const paths=[];rows.forEach((row,j)=>{let left=0;for(const raw of row){if(!/\s/u.test(raw)){const g=glyph(raw);if(g?.d)paths.push({d:g.d,tx:it.x+left*scale*fit,ty:it.y+j*it.fontSize*1.18,sx:scale*fit,sy:scale,stroke:it.color,sw:1.35});}left+=advance(raw);}});
+    const scale=it.fontSize/23,widths=rows.map(row=>[...row].reduce((a,c)=>a+advance(c),0)),fit=Math.min(1,it.w/(Math.max(1,...widths)*scale)),room=it.w/(scale*fit);
+    const paths=[];rows.forEach((row,j)=>{let left=(room-widths[j])*(ALIGN_SHIFT[it.align]||0);for(const raw of row){if(!/\s/u.test(raw)){const g=glyph(raw);if(g?.d)paths.push({d:g.d,tx:it.x+left*scale*fit,ty:it.y+j*it.fontSize*1.18,sx:scale*fit,sy:scale,stroke:it.color,sw:1.35});}left+=advance(raw);}});
     return paths;
   }
   function shapeTracePaths(it){
@@ -150,9 +150,51 @@
     else for(let y=3;y<=99;y+=6)paths.push({d:`M0 ${y} L100 ${y}`,sw:7.4});
     return paths;
   }
-  function maskedDrawing(it,body,progress,withHand,letterPaths){
+  // Handwriting is written letter by letter: finished letters show in full, the current letter is uncovered exactly up
+  // to the pen using its time map (see letterReveal), and later letters stay hidden.
+  // The pen's timeline for handwritten text, in drawn-length units. Between strokes the pen lifts and travels through
+  // the air to the next start instead of jumping there.
+  // Each later stroke of a letter starts a little later in its time map than the previous one ends, so finishing one
+  // stroke never uncovers the start of the next while the pen is still in the air.
+  const STROKE_GAP=.03,penPlans=new WeakMap();
+  function penPlan(it){
+    if(penPlans.has(it.letterPaths))return penPlans.get(it.letterPaths);
+    const node=document.createElementNS('http://www.w3.org/2000/svg','path');$('#stage').appendChild(node);
+    const steps=[],letterLen=it.letters.map(()=>0),letterStrokes=it.letters.map(()=>0);let last=null,total=0;
+    for(const p of it.letterPaths){
+      const len=Math.max(.01,pathLength(p.d));node.setAttribute('d',p.d);const a=node.getPointAtLength(0),b=node.getPointAtLength(len);
+      if(last){const time=Math.min(Math.hypot(a.x-last.x,a.y-last.y),150)*.35+5;steps.push({air:true,from:last,to:{x:a.x,y:a.y},time});total+=time;}
+      const time=Math.max(len,6);steps.push({d:p.d,len,letter:p.letter,index:letterStrokes[p.letter]++,time});total+=time;letterLen[p.letter]+=len;last={x:b.x,y:b.y};
+    }
+    node.remove();
+    const plan={steps,total,letterLen,letterStrokes};penPlans.set(it.letterPaths,plan);return plan;
+  }
+  function handwritingMarkup(it,progress,withHand){
+    if(progress>=1)return `<image href="${esc(it.handwritingSrc)}" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" preserveAspectRatio="none"/>`;
+    const plan=penPlan(it),drawn=it.letters.map(()=>0),index=it.letters.map(()=>0);let clock=progress*plan.total,pen=null,lift=0,started=-1;
+    for(const s of plan.steps){
+      if(clock<=0)break;const f=clamp(clock/s.time,0,1);clock-=s.time;
+      if(s.air){pen={x:s.from.x+(s.to.x-s.from.x)*f,y:s.from.y+(s.to.y-s.from.y)*f};lift=Math.sin(Math.PI*f);continue;}
+      // Like a real hand, each stroke starts and ends slowly and moves fastest through its middle.
+      const eased=f-.6*Math.sin(2*Math.PI*f)/(2*Math.PI);drawn[s.letter]+=s.len*eased;index[s.letter]=s.index;started=Math.max(started,s.letter);pen={d:s.d,at:s.len*eased};lift=0;
+    }
+    let markup='';const key=it.id.replace(/[^a-zA-Z0-9]/g,'');
+    it.letters.forEach((l,k)=>{
+      const gap=plan.letterLen[k]*STROKE_GAP,done=plan.letterLen[k]?clamp((drawn[k]+index[k]*gap)/(plan.letterLen[k]+(plan.letterStrokes[k]-1)*gap),0,1):k<started?1:0;
+      if(done<=0)return;
+      const box=`x="${it.x+l.box[0]*it.w}" y="${it.y+l.box[1]*it.h}" width="${l.box[2]*it.w}" height="${l.box[3]*it.h}"`,image=`<image href="${esc(l.src)}" ${box} preserveAspectRatio="none"`;
+      if(done>=1){markup+=`${image}/>`;return;}
+      // Keep pixels whose stored time (alpha 255 at the letter's start to 5 at its end) the pen has reached. The edge is nearly hard so
+      // nothing shows ahead of the pen, even across a pen lift.
+      const cut=(255-250*done)/255,slope=200,maskId=`write-${key}-${k}`;
+      markup+=`<defs><filter id="${maskId}-f" filterUnits="userSpaceOnUse" ${box} color-interpolation-filters="sRGB"><feComponentTransfer><feFuncA type="linear" slope="${slope}" intercept="${(1-slope*cut).toFixed(4)}"/></feComponentTransfer></filter><mask id="${maskId}" maskUnits="userSpaceOnUse" ${box} style="mask-type:alpha"><image href="${esc(l.map)}" ${box} preserveAspectRatio="none" filter="url(#${maskId}-f)"/></mask></defs>${image} mask="url(#${maskId})"/>`;
+    });
+    if(withHand&&pen?.d){const node=document.createElementNS('http://www.w3.org/2000/svg','path');node.setAttribute('d',pen.d);$('#stage').appendChild(node);try{const pt=node.getPointAtLength(pen.at);pen={x:pt.x,y:pt.y};}catch{pen=null;}node.remove();}
+    return markup+(withHand&&pen&&!pen.d?handMarkup(it.x+pen.x,it.y+pen.y-lift*it.fontSize*.15):'');
+  }
+  function maskedDrawing(it,body,progress,withHand){
     if(progress>=1)return body;
-    const raw=letterPaths|| (it.type==='shape'?shapeTracePaths(it):imageTracePaths(it)),sx=letterPaths?1:it.w/100,sy=letterPaths?1:it.h/100;
+    const raw=it.type==='shape'?shapeTracePaths(it):imageTracePaths(it),sx=it.w/100,sy=it.h/100;
     const paths=raw.map(p=>({...p,tx:it.x,ty:it.y,sx,sy,stroke:'#fff'}));
     const drawn=sequenceMarkup(paths,progress,withHand),maskId=`mask-${it.id.replace(/[^a-zA-Z0-9]/g,'')}`;
     return `<defs><mask id="${maskId}" maskUnits="userSpaceOnUse" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}"><rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" fill="black"/>${drawn.markup}</mask></defs><g mask="url(#${maskId})">${body}</g>${drawn.hand}`;
@@ -166,9 +208,8 @@
       const transform=it.animation==='slide'?`translate(${(1-progress)*-150} 0)`:it.animation==='pop'?`translate(${it.x+it.w/2} ${it.y+it.h/2}) scale(${.5+.5*progress}) translate(${-it.x-it.w/2} ${-it.y-it.h/2})`:'';
       return `<g ${attr} opacity="${opacity}" transform="${transform}">${full}</g>`;
     }
-    if(it.type==='text'&&HANDWRITING_FONTS[it.font]&&it.handwritingSrc&&it.letterPaths?.length&&it.handwritingSignature===textSignature(it)){
-      const body=`<image href="${esc(it.handwritingSrc)}" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" preserveAspectRatio="none"/>`;
-      return start+maskedDrawing(it,body,progress,hand&&progress<1,it.letterPaths)+hit+end;
+    if(it.type==='text'&&HANDWRITING_FONTS[it.font]&&it.handwritingSrc&&it.handwritingSignature===textSignature(it)){
+      return start+handwritingMarkup(it,it.letters?.length?progress:1,hand&&progress<1)+hit+end;
     }
     if(it.type==='icon'||it.type==='vector'||it.type==='text'){
       const drawn=sequenceMarkup(it.type==='text'?textPaths(it):vectorPaths(it),progress,hand&&progress<1);
@@ -239,7 +280,8 @@
     const len=totalLen();$('#durationLabel').textContent=fmt(len);$('#timeLabel').textContent=`${fmt(state.time)} / ${fmt(len)}`;
     $('#scrubber').value=len?Math.round(state.time/len*1000):0;$('#scrubPercent').textContent=`${len?Math.round(state.time/len*100):0}%`;
     $('#audioTrackLabel').textContent=state.project.audio?.name||'Add narration or music from the Audio tool';
-    $('#playBtn').textContent=state.playing?'Ⅱ':'▶';
+    $('#playBtn').textContent=state.playing?'Ⅱ':'▶';$('#previewBtn').innerHTML=state.playing?'Ⅱ <span>Pause</span>':'▶ <span>Preview</span>';
+    $('#stopBtn').disabled=$('#topStopBtn').disabled=!state.preview&&state.time===0;
   }
   const field=(label,key,val,type='text',opts='')=>`<div class="field"><label>${label}</label><input data-set="${key}" type="${type}" value="${esc(val)}" ${opts}></div>`;
   const selectField=(label,key,val,options)=>`<div class="field"><label>${label}</label><select data-set="${key}">${options.map(([v,n])=>`<option value="${v}" ${val===v?'selected':''}>${n}</option>`).join('')}</select></div>`;
@@ -250,7 +292,7 @@
       if(it.type==='camera'){
         html+=`<div class="panel-divider"></div>${field('Zoom','zoom',it.zoom,'number','min="0.2" max="5" step="0.05"')}<div class="field-row">${field('Center X','cx',Math.round(it.cx),'number','step="10"')}${field('Center Y','cy',Math.round(it.cy),'number','step="10"')}</div><button class="panel-action camera-preview" data-action="preview-camera">Preview this camera frame</button><p class="panel-help camera-help">Drag the green frame to pan. Drag its handles to resize the shot. Preview is cropped to this frame.</p>`;
       }else{
-        if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}${selectField('Writing style','font',it.font||'futural',FONT_OPTIONS)}${HANDWRITING_FONTS[it.font]?`<div class="font-sample" style="font-family:'${esc(HANDWRITING_FONTS[it.font])}',sans-serif">The quick brown fox 123</div>`:''}`;
+        if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}<div class="field"><label>Align</label><div class="segmented">${[['left','⇤ Left'],['center','↔ Center'],['right','Right ⇥']].map(([v,n])=>`<button data-align="${v}" class="${(it.align||'left')===v?'active':''}" title="Align text ${v}">${n}</button>`).join('')}</div></div>${selectField('Writing style','font',it.font||'futural',FONT_OPTIONS)}${HANDWRITING_FONTS[it.font]?`<div class="font-sample" style="font-family:'${esc(HANDWRITING_FONTS[it.font])}',sans-serif">The quick brown fox 123</div>`:''}`;
         if(it.type==='icon'||it.type==='text'||it.type==='vector')html+=field('Color','color',it.color||'#285d63','color');
         if(it.type==='shape')html+=`${selectField('Shape','shape',it.shape,[['round','Rounded rectangle'],['rect','Rectangle'],['circle','Ellipse']])}${field('Fill','fill',it.fill,'color')}`;
         html+=`<div class="field-row">${field('X position','x',Math.round(it.x),'number','step="1"')}${field('Y position','y',Math.round(it.y),'number','step="1"')}</div><div class="field-row">${field('Width','w',Math.round(it.w),'number','min="10"')}${field('Height','h',Math.round(it.h),'number','min="10"')}</div>`;
@@ -441,6 +483,88 @@
     for(let i=1;i<pts.length-1;i++)d+=` Q${f(pts[i][0])} ${f(pts[i][1])} ${f((pts[i][0]+pts[i+1][0])/2)} ${f((pts[i][1]+pts[i+1][1])/2)}`;
     const last=pts[pts.length-1];return d+` L${f(last[0])} ${f(last[1])}`;
   }
+  // How each character is written by hand: strokes separated by "|", each a list of "x y" waypoints in percent of the
+  // letter's ink box (y down). The pen follows the letter's own centerline from waypoint to waypoint, so the order and
+  // direction match handwriting (bowls counter-clockwise from the top, "a" bowl before its stem, "e" crossbar first).
+  const STROKE_GUIDES={
+    a:'82 18 50 0 10 30 6 68 40 100 80 75 88 3 90 100',b:'10 0 10 100 12 55 55 35 92 68 55 100 12 92',c:'85 15 50 0 8 45 25 90 55 100 88 85',
+    d:'82 48 45 35 8 68 45 100 85 82 88 0 90 100',e:'10 55 90 50 80 15 45 0 10 35 15 85 50 100 88 85',f:'80 8 55 0 38 15 35 100|10 40 75 40',
+    g:'80 15 45 0 8 30 40 60 80 45 85 2 85 80 60 100 15 88',h:'10 0 10 100 12 60 50 38 85 55 88 100',i:'50 35 50 100|50 5',j:'60 35 60 85 40 100 10 90|60 5',
+    k:'12 0 12 100|85 40 15 70 85 100',l:'50 0 50 100',m:'8 0 8 100 8 25 28 2 48 22 50 100 50 25 72 2 90 22 92 100',n:'10 0 10 100 10 25 50 0 88 25 90 100',
+    o:'55 0 10 25 8 75 50 100 90 70 88 25 55 0',p:'10 0 10 100 10 8 55 0 92 30 55 60 12 52',q:'85 10 45 0 8 30 45 60 85 50 88 0 90 100',r:'12 0 12 100 12 35 45 3 85 10',
+    s:'85 12 50 0 12 20 45 50 88 75 55 100 10 88',t:'45 0 45 85 60 100 85 95|10 32 85 32',u:'10 0 10 70 40 100 85 72 88 0 90 100',v:'5 0 50 100 95 0',
+    w:'3 0 25 100 50 25 75 100 97 0',x:'10 0 90 100|90 0 10 100',y:'10 0 50 60|90 0 30 100',z:'10 2 90 2 10 98 90 98',
+    A:'50 0 5 100|50 0 95 100|25 65 75 65',B:'10 0 10 100|10 2 65 2 88 25 65 48 12 50 75 52 92 76 70 98 12 100',C:'88 15 55 0 10 30 10 70 55 100 90 85',
+    D:'10 0 10 100|10 2 60 5 92 50 60 95 10 98',E:'88 0 10 0 10 100 88 100|10 50 70 50',F:'88 0 10 0 10 100|10 50 70 50',G:'88 15 55 0 10 30 10 70 55 100 90 80 90 55 55 55',
+    H:'10 0 10 100|90 0 90 100|10 50 90 50',I:'50 0 50 100|15 0 85 0|15 100 85 100',J:'85 0 85 75 60 100 25 98 10 75',K:'12 0 12 100|88 0 15 60|35 45 90 100',L:'10 0 10 100 88 100',
+    M:'8 100 8 0 50 70 92 0 92 100',N:'10 100 10 0 90 100 90 0',O:'55 0 10 25 8 75 50 100 90 70 90 25 55 0',P:'10 0 10 100|10 2 65 2 90 28 65 52 12 52',
+    Q:'55 0 10 25 8 75 50 100 90 70 90 25 55 0|60 70 95 100',R:'10 0 10 100|10 2 65 2 90 28 65 52 12 52 90 100',S:'85 12 50 0 12 20 45 50 88 75 55 100 10 88',
+    T:'5 0 95 0|50 0 50 100',U:'10 0 10 70 50 100 90 70 90 0',V:'5 0 50 100 95 0',W:'3 0 25 100 50 30 75 100 97 0',X:'8 0 92 100|92 0 8 100',
+    Y:'8 0 50 50|92 0 50 50 50 100',Z:'8 0 92 0 8 100 92 100',
+    0:'55 0 10 30 10 70 50 100 90 70 90 30 55 0',1:'20 20 55 0 55 100',2:'10 22 45 0 88 20 80 50 8 100 92 100',3:'12 12 50 0 85 22 45 48 88 72 50 100 10 88',
+    4:'70 0 5 70 95 70|72 30 72 100',5:'85 0 20 0 15 45 55 38 88 65 55 100 10 88',6:'80 5 45 0 10 45 15 85 50 100 88 75 55 50 12 65',7:'8 0 92 0 40 100',
+    8:'75 12 50 0 15 22 50 48 88 75 50 100 12 75 50 48 85 22 75 12',9:'88 30 50 50 12 28 50 0 88 25 90 50 85 100',
+    '.':'50 50',',':'60 0 35 100','!':'50 0 50 70|50 97','?':'10 22 45 0 88 22 50 55 50 72|50 97',"'":'50 0 50 100','"':'25 0 25 100|75 0 75 100',
+    '-':'0 50 100 50',':':'50 5|50 95',';':'50 5|55 60 40 100','(':'75 0 15 50 75 100',')':'25 0 85 50 25 100','/':'90 0 10 100'
+  };
+  function heapPush(h,item){h.push(item);for(let i=h.length-1;i>0;){const p=(i-1)>>1;if(h[p][0]<=h[i][0])break;[h[p],h[i]]=[h[i],h[p]];i=p;}}
+  function heapPop(h){const top=h[0],last=h.pop();if(h.length){h[0]=last;for(let i=0;;){const l=i*2+1,r=l+1;let m=i;if(l<h.length&&h[l][0]<h[m][0])m=l;if(r<h.length&&h[r][0]<h[m][0])m=r;if(m===i)break;[h[m],h[i]]=[h[i],h[m]];i=m;}}return top;}
+  // Routes a STROKE_GUIDES entry's waypoints along its one-pixel skeleton. Each waypoint picks one of its nearest
+  // skeleton pixels so that the total of waypoint offsets and centerline distance is smallest. Returns null when the
+  // character has no guide or this font's letter does not fit it (for example a two-storey "a"); the caller then falls
+  // back to the generic tracer.
+  function guidedGlyphStrokes(character,g){
+    const guide=STROKE_GUIDES[character];if(!guide)return null;
+    const {sk,ink,dist,degree,W,H,pad,size,tipOf}=g,N=W*H;
+    let x0=W,y0=H,x1=-1,y1=-1;for(let i=0;i<N;i++)if(ink[i]){const x=i%W,y=(i/W)|0;x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y);}
+    const skel=[];for(let i=0;i<N;i++)if(sk[i])skel.push(i);
+    if(x1<0||!skel.length)return null;
+    const bw=Math.max(1,x1-x0),bh=Math.max(1,y1-y0),span=Math.max(bw,bh),S=skel.length,idx=new Int32Array(N).fill(-1);skel.forEach((p,k)=>{idx[p]=k;});
+    const adj=skel.map(p=>{const x=p%W,list=[];for(const [dx,dy,c] of [[-1,0,1],[1,0,1],[0,-1,1],[0,1,1],[-1,-1,1.414],[1,-1,1.414],[-1,1,1.414],[1,1,1.414]]){if(x+dx<0||x+dx>=W)continue;const j=idx[p+dy*W+dx];if(j>=0)list.push(j,c);}return list;});
+    const dijkstra=(src,targets)=>{const d=new Float64Array(S).fill(Infinity),prev=new Int32Array(S).fill(-1),heap=[[0,src]];d[src]=0;let left=targets.size;
+      while(heap.length){const [dv,v]=heapPop(heap);if(dv>d[v])continue;if(targets.has(v)&&--left<=0)break;
+        const a=adj[v];for(let k=0;k<a.length;k+=2){const u=a[k],nd=dv+a[k+1];if(nd<d[u]){d[u]=nd;prev[u]=v;heapPush(heap,[nd,u]);}}}
+      return {d,prev};};
+    const pixel=k=>[skel[k]%W,(skel[k]/W)|0],strokes=[],route=new Uint8Array(S);let worst=0;
+    const finish=(list,single)=>{
+      // Serif bars in the guide (as on "I") collapse to a speck on plain letters; leave those out.
+      if(!single&&list.length<4)return;
+      // Free ends stop about half a pen width inside the letter; carry them on to its edge.
+      let pts=[];list.forEach((k,i)=>{route[k]=1;const [x,y]=pixel(k),p=[x-pad,y-pad];if(pts.length&&pts[pts.length-1][0]===p[0]&&pts[pts.length-1][1]===p[1])return;pts.push(p);
+        // Where the pen turns back at a free end (the top of "d"), reach the letter's edge before coming back.
+        if(i>0&&i<list.length-1&&degree[skel[k]]===1&&pts.length>1){pts.push(tipOf(pts),p);}});
+      if(pts.length>1){if(degree[skel[list[list.length-1]]]===1)pts.push(tipOf(pts));if(degree[skel[list[0]]]===1)pts.unshift(tipOf([...pts].reverse()));}
+      strokes.push({pts:simplifyStroke(relaxStroke(pts,3),.7),w:Math.max(1.5,...list.map(k=>dist[skel[k]]))*2+1.5});
+    };
+    for(const part of guide.split('|')){
+      const nums=part.trim().split(/\s+/).map(Number),wps=[];for(let k=0;k<nums.length;k+=2)wps.push([x0+nums[k]/100*bw,y0+nums[k+1]/100*bh]);
+      const cands=wps.map(([wx,wy])=>skel.map((p,k)=>[Math.hypot(p%W-wx,((p/W)|0)-wy),k]).sort((a,b)=>a[0]-b[0]).slice(0,24));
+      let cost=cands[0].map(([u])=>u*4);const back=[];
+      for(let k=1;k<wps.length;k++){
+        const next=cands[k].map(()=>Infinity),from=cands[k].map(()=>-1),lift=cands[k].map(()=>false),targets=new Set(cands[k].map(c=>c[1]));
+        cands[k-1].forEach(([,src],a)=>{const {d}=dijkstra(src,targets);
+          cands[k].forEach(([u,dst],b)=>{let step=d[dst],jump=false;
+            // Parts that are not joined (such as the two strokes of a printed "x" in some fonts) are reached by lifting the pen.
+            if(!Number.isFinite(step)){const [ax,ay]=pixel(src),[bx,by]=pixel(dst);step=Math.hypot(ax-bx,ay-by)*2+size*.3;jump=true;}
+            const c=cost[a]+step+u*4;if(c<next[b]){next[b]=c;from[b]=a;lift[b]=jump;}});});
+        back.push({from,lift});cost=next;
+      }
+      let b=cost.indexOf(Math.min(...cost));const chosen=[b],lifts=[];
+      for(let k=back.length-1;k>=0;k--){lifts.unshift(back[k].lift[b]);b=back[k].from[b];chosen.unshift(b);}
+      let list=[cands[0][chosen[0]][1]];worst=Math.max(worst,cands[0][chosen[0]][0]/span);
+      for(let k=1;k<wps.length;k++){
+        const src=cands[k-1][chosen[k-1]][1],dst=cands[k][chosen[k]][1];worst=Math.max(worst,cands[k][chosen[k]][0]/span);
+        if(lifts[k-1]){finish(list,false);list=[dst];continue;}
+        const {prev}=dijkstra(src,new Set([dst])),seg=[];for(let v=dst;v!==src&&v>=0;v=prev[v])seg.push(v);list.push(...seg.reverse());
+      }
+      finish(list,wps.length===1);
+    }
+    // The guide fits when every waypoint found the letter nearby and the route passes close to nearly all of the skeleton.
+    const depth=new Int8Array(S).fill(-1),queue=[];for(let k=0;k<S;k++)if(route[k]){depth[k]=0;queue.push(k);}
+    for(let q=0;q<queue.length;q++){const k=queue[q];if(depth[k]>=4)continue;for(let a=adj[k],j=0;j<a.length;j+=2)if(depth[a[j]]<0){depth[a[j]]=depth[k]+1;queue.push(a[j]);}}
+    g.stats={worst,coverage:queue.length/S};
+    return worst<=.3&&queue.length/S>=.85?strokes:null;
+  }
   // Traces a letter at a fixed size into ordered pen strokes. Coordinates are in GLYPH_TRACE_SIZE pixels from the
   // fillText origin (textBaseline top); w is the full pen width needed to uncover the letter along that stroke.
   function traceGlyphStrokes(character,family){
@@ -509,9 +633,15 @@
       return fromEnd?[x0-p[0],y0-p[1]]:[p[0]-x0,p[1]-y0];
     };
     // The centerline stops about half a pen width short of each free end; carry it on to the letter's edge.
-    const inkAt=(x,y)=>ink[Math.round(y+pad)*W+Math.round(x+pad)];
+    // Fainter ink counts here so the pen reaches the very end of tapered strokes.
+    const inkAt=(x,y)=>alpha[(Math.round(y+pad)*W+Math.round(x+pad))*4+3]>40;
     const tipOf=(seq)=>{const [dx,dy]=direction(seq,true),len=Math.hypot(dx,dy);let [x,y]=seq[seq.length-1];if(!len)return [x,y];
       for(let step=0;step<size;step++){const nx=x+dx/len*.5,ny=y+dy/len*.5;if(!inkAt(nx,ny))break;x=nx;y=ny;}return [x,y];};
+    // Prefer the character's handwriting guide; the generic tracer below handles anything the guide does not fit.
+    // Some fonts draw lowercase letters as small capitals (Permanent Marker), so the other case's guide is tried too.
+    const guide={sk,ink,dist,degree,W,H,pad,size,tipOf},other=character.toLowerCase()===character?character.toUpperCase():character.toLowerCase();
+    const guided=guidedGlyphStrokes(character,guide)||(other!==character?guidedGlyphStrokes(other,guide):null);
+    if(guided){const result={advance,strokes:guided,guided:true,stats:guide.stats};glyphTraceCache.set(key,result);if(glyphTraceCache.size>500)glyphTraceCache.clear();return result;}
     {const deg=nodes.map(()=>0);for(const e of live){deg[e.a]++;deg[e.b]++;}
       for(const e of live){if(e.a===e.b)continue;if(deg[e.b]===1)e.pts.push(nodes[e.b].tip=tipOf(e.pts));if(deg[e.a]===1)e.pts.unshift(nodes[e.a].tip=tipOf([...e.pts].reverse()));}}
     // Thinning leaves short spurs where a stroke bends or joins. A spur's true end barely reaches past the joint's
@@ -563,24 +693,70 @@
         strokes.push({pts:simplifyStroke(relaxStroke(pts,3),.7),w:w*2+1.5});pen=pts[pts.length-1];
       }
     }
-    // Patch any part of the letter the strokes would leave hidden, right after the stroke nearest to it.
-    const cover=document.createElement('canvas');cover.width=W;cover.height=H;
-    const cc=cover.getContext('2d',{willReadFrequently:true});cc.lineCap='round';cc.lineJoin='round';cc.translate(pad,pad);
-    for(const s of strokes){cc.lineWidth=s.w;cc.stroke(new Path2D(strokePathData(s.pts)));}
-    const covered=cc.getImageData(0,0,W,H).data,seen=new Uint8Array(N),patches=[];
-    for(let i=0;i<N;i++)if(ink[i]&&!seen[i]&&covered[i*4+3]<100){
-      const queue=[i];seen[i]=1;
-      for(let q=0;q<queue.length;q++)for(const o of [-1,1,-W,W]){const j=queue[q]+o;if(ink[j]&&!seen[j]&&covered[j*4+3]<100){seen[j]=1;queue.push(j);}}
-      if(queue.length<6)continue;
-      const d2=(a,b)=>(a%W-b%W)**2+(Math.floor(a/W)-Math.floor(b/W))**2,far=from=>queue.reduce((best,p)=>d2(p,from)>d2(best,from)?p:best,from);
-      const a=far(queue[0]),b=far(a),pts=[at(a),at(b)],w=Math.max(...queue.map(p=>dist[p]))*2+2;
-      let near=0,gap=Infinity;strokes.forEach((s,k)=>{for(const p of s.pts){const g=Math.hypot(p[0]-pts[0][0],p[1]-pts[0][1]);if(g<gap){gap=g;near=k;}}});
-      patches.push({near,stroke:{pts,w}});
-    }
-    for(const p of patches.sort((a,b)=>b.near-a.near))strokes.splice(p.near+1,0,p.stroke);
-    const result={advance,strokes};glyphTraceCache.set(key,result);if(glyphTraceCache.size>500)glyphTraceCache.clear();return result;
+    const result={advance,strokes,guided:false,stats:guide.stats};glyphTraceCache.set(key,result);if(glyphTraceCache.size>500)glyphTraceCache.clear();return result;
   }
-  function textSignature(it){return JSON.stringify(['letter-strokes-2',it.text,it.font,it.fontSize,it.color,it.w,it.h]);}
+  const ALIGN_SHIFT={left:0,center:.5,right:1};
+  function textSignature(it){return JSON.stringify(['letter-guided-4',it.text,it.font,it.fontSize,it.color,it.w,it.h,it.align||'left']);}
+  // Renders one letter by itself and records, for every pixel, how far along the letter's strokes the pen is when it
+  // reaches that pixel. Times spread out from the pen path through the letter's own ink, so a pixel is uncovered only
+  // once the pen passes the part of the letter it belongs to, never across a gap or from a neighbouring letter.
+  // Pixels must line up with the full text image: ctx maps (u,v) to canvas pixels (u*fit*ratio, v*ratio).
+  function letterReveal(char,font,color,left,top,size,advance,fit,ratio,canvas,paths){
+    const ox=Math.floor((left-size*.6)*fit*ratio),oy=Math.floor((top-size*.5)*ratio);
+    const AW=Math.ceil((advance+size*1.2)*fit*ratio)+2,AH=Math.ceil(size*2.1*ratio)+2,area=document.createElement('canvas');area.width=AW;area.height=AH;
+    const ac=area.getContext('2d',{willReadFrequently:true});ac.setTransform(ratio*fit,0,0,ratio,-ox,-oy);
+    ac.font=font;ac.textBaseline='top';ac.fillStyle=color;ac.fillText(char,left,top);
+    const all=ac.getImageData(0,0,AW,AH).data;let x0=AW,y0=AH,x1=-1,y1=-1;
+    for(let y=0;y<AH;y++)for(let x=0;x<AW;x++)if(all[(y*AW+x)*4+3]){x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y);}
+    if(x1<0)return null;
+    x0=Math.max(0,x0-3);y0=Math.max(0,y0-3);x1=Math.min(AW-1,x1+3);y1=Math.min(AH-1,y1+3);
+    const W=x1-x0+1,H=y1-y0+1,N=W*H,letter=document.createElement('canvas');letter.width=W;letter.height=H;
+    letter.getContext('2d').drawImage(area,x0,y0,W,H,0,0,W,H);
+    const ink=letter.getContext('2d',{willReadFrequently:true}).getImageData(0,0,W,H).data,bx=ox+x0,by=oy+y0;
+    // Distance from each ink pixel to the nearest blank one: the letter's local half-width.
+    const solid=new Float32Array(N);for(let i=0;i<N;i++)solid[i]=ink[i*4+3]>=40?1e6:0;
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;if(!solid[i])continue;solid[i]=Math.min(solid[i],x?solid[i-1]+1:1,y?solid[i-W]+1:1,x&&y?solid[i-W-1]+1.414:1,y&&x<W-1?solid[i-W+1]+1.414:1);}
+    for(let y=H-1;y>=0;y--)for(let x=W-1;x>=0;x--){const i=y*W+x;if(!solid[i])continue;solid[i]=Math.min(solid[i],x<W-1?solid[i+1]+1:1,y<H-1?solid[i+W]+1:1,x<W-1&&y<H-1?solid[i+W+1]+1.414:1,y<H-1&&x?solid[i+W-1]+1.414:1);}
+    // Seed the pen path every half pixel, in writing order, with its share of the letter's total stroke length. Where the
+    // pen goes back over ink an earlier pass already covered (a retrace, or one stroke crossing another), it adds no seed:
+    // those pixels belong to the earlier pass, and seeding them again would leave a hidden line through visible ink.
+    const lens=paths.map(p=>Math.max(.01,pathLength(p.d))),total=lens.reduce((a,b)=>a+b,0),time=new Float32Array(N).fill(-1),queue=new Int32Array(N),coveredAt=new Float32Array(N).fill(-1);let tail=0;
+    if(total>0){
+      const node=document.createElementNS('http://www.w3.org/2000/svg','path');$('#stage').appendChild(node);let before=0,last=-1;const gap=total*STROKE_GAP,span=total+(paths.length-1)*gap;
+      paths.forEach((p,k)=>{node.setAttribute('d',p.d);
+        for(let l=0;;l=Math.min(lens[k],l+.5/ratio)){
+          const pt=node.getPointAtLength(l),x=Math.round(pt.x*ratio-bx),y=Math.round(pt.y*ratio-by),i=y*W+x,along=(before+l)*ratio+k*1e4;
+          if(x>=0&&y>=0&&x<W&&y<H&&i!==last){
+            // A marker as wide as the letter here covers this circle, which always fits inside the ink. Ink covered by a
+            // part of the path the pen has since moved well away from belongs to that earlier pass.
+            const r=Math.floor(solid[i]),earlier=coveredAt[i]>=0&&along-coveredAt[i]>2*r+3;
+            if(!earlier&&time[i]<0){time[i]=(before+l+k*gap)/span;queue[tail++]=i;}
+            for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++){const j=(y+dy)*W+x+dx;if(x+dx>=0&&y+dy>=0&&x+dx<W&&y+dy<H&&dx*dx+dy*dy<=r*r&&coveredAt[j]<0)coveredAt[j]=along;}
+            last=i;
+          }
+          if(l>=lens[k])break;
+        }
+        before+=lens[k];
+      });
+      node.remove();
+    }
+    if(!tail){time.fill(0);}
+    else{
+      // First spread only through ink, then out to every remaining pixel so soft edges and stray specks follow along.
+      const step=(from,inkOnly)=>{for(let head=from;head<tail;head++){const i=queue[head],x=i%W;
+        for(const j of [x>0?i-1:-1,x<W-1?i+1:-1,i-W,i+W,x>0?i-W-1:-1,x<W-1?i-W+1:-1,x>0?i+W-1:-1,x<W-1?i+W+1:-1])
+          if(j>=0&&j<N&&time[j]<0&&(!inkOnly||ink[j*4+3]>=40)){time[j]=time[i];queue[tail++]=j;}}};
+      step(0,true);step(0,false);
+    }
+    // The map stores each pixel's time in its alpha: 255 at the start of the letter down to 5 at its end. Pixels more
+    // than 3px from any ink stay empty, since the letter is transparent there; this keeps the image small.
+    let near=new Uint8Array(N);for(let i=0;i<N;i++)near[i]=ink[i*4+3]?1:0;
+    for(let pass=0;pass<3;pass++){const grown=near.slice();for(let i=0;i<N;i++)if(!near[i]){const x=i%W;if((x>0&&near[i-1])||(x<W-1&&near[i+1])||near[i-W]||near[i+W])grown[i]=1;}near=grown;}
+    const map=document.createElement('canvas');map.width=W;map.height=H;const mc=map.getContext('2d'),data=mc.createImageData(W,H);
+    for(let i=0;i<N;i++)if(near[i]){data.data[i*4]=data.data[i*4+1]=data.data[i*4+2]=255;data.data[i*4+3]=Math.round(255-clamp(time[i],0,1)*250);}
+    mc.putImageData(data,0,0);
+    return {box:[bx/canvas.width,by/canvas.height,W/canvas.width,H/canvas.height],src:letter.toDataURL('image/png'),map:map.toDataURL('image/png')};
+  }
   async function refreshHandwriting(it){
     if(!HANDWRITING_FONTS[it.font])return;
     const signature=textSignature(it),family=HANDWRITING_FONTS[it.font],rows=String(it.text||'').split('\n').slice(0,8);
@@ -590,23 +766,26 @@
       const ratio=Math.max(1,Math.min(3,2400/Math.max(1,it.w),2400/Math.max(1,it.h))),canvas=document.createElement('canvas');
       canvas.width=Math.max(1,Math.ceil(it.w*ratio));canvas.height=Math.max(1,Math.ceil(it.h*ratio));
       const ctx=canvas.getContext('2d');ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.scale(ratio,ratio);
-      const size=Math.max(12,Math.min(it.fontSize,(it.h-8)/(Math.max(1,rows.length)*1.16)));
-      ctx.font=`${size}px "${family}"`;ctx.textBaseline='top';ctx.fillStyle=it.color||'#213b4b';
-      const longest=Math.max(1,...rows.map(row=>[...row].reduce((sum,c)=>sum+ctx.measureText(c).width,0))),fit=Math.min(1,(it.w-8)/longest);
-      ctx.scale(fit,1);const letterPaths=[];
-      rows.forEach((row,line)=>{let left=4/fit;const top=2+line*size*1.16;
+      const size=Math.max(12,Math.min(it.fontSize,(it.h-8)/(Math.max(1,rows.length)*1.16))),font=`${size}px "${family}"`,color=it.color||'#213b4b';
+      ctx.font=font;ctx.textBaseline='top';ctx.fillStyle=color;
+      const widths=rows.map(row=>[...row].reduce((sum,c)=>sum+ctx.measureText(c).width,0)),fit=Math.min(1,(it.w-8)/Math.max(1,...widths)),room=(it.w-8)/fit;
+      ctx.scale(fit,1);const letterPaths=[],letters=[];
+      rows.forEach((row,line)=>{let left=4/fit+(room-widths[line])*(ALIGN_SHIFT[it.align]||0);const top=2+line*size*1.16;
         for(const char of row){
+          const advance=ctx.measureText(char).width;
           if(!/\s/u.test(char)){
             ctx.fillText(char,left,top);
             const glyph=traceGlyphStrokes(char,family),k=size/GLYPH_TRACE_SIZE;
-            for(const s of glyph.strokes)letterPaths.push({d:strokePathData(s.pts.map(([x,y])=>[(left+x*k)*fit,top+y*k])),sw:+(s.w*k).toFixed(2)});
+            const paths=glyph.strokes.map(s=>({d:strokePathData(s.pts.map(([x,y])=>[(left+x*k)*fit,top+y*k])),letter:letters.length}));
+            const reveal=letterReveal(char,font,color,left,top,size,advance,fit,ratio,canvas,paths);
+            if(reveal){letters.push(reveal);letterPaths.push(...paths);}
           }
-          left+=ctx.measureText(char).width;
+          left+=advance;
         }
       });
       const src=canvas.toDataURL('image/png');
       if(textSignature(it)!==signature||!state.project.scenes.some(s=>s.items.includes(it)))return;
-      it.handwritingSrc=src;it.handwritingSignature=signature;it.letterPaths=letterPaths;it.tracePaths=[];it.fillPaths=[];it.transparentArtwork=true;changed(false);
+      it.handwritingSrc=src;it.handwritingSignature=signature;it.letterPaths=letterPaths;it.letters=letters;it.tracePaths=[];it.fillPaths=[];it.transparentArtwork=true;changed(false);
     }catch(e){console.error(e);toast('Could not load that writing style.');}
   }
   function scheduleHandwriting(it){
@@ -635,9 +814,11 @@
     state.frame=requestAnimationFrame(tick);renderTimeline();
   }
   function stopPreview(){pause();state.preview=false;state.previewCameraBox=null;renderStage();}
+  // Stop ends the preview and rewinds, so the next Play starts the video from the beginning.
+  function stop(){state.time=0;if(state.audio){try{state.audio.currentTime=0}catch{}}stopPreview();renderTimeline();}
   function openDb(){return new Promise((resolve,reject)=>{const req=indexedDB.open('whiteboard-studio',1);req.onupgradeneeded=()=>req.result.createObjectStore('projects',{keyPath:'id'});req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
   function dbTask(mode,fn){return new Promise((resolve,reject)=>{const tx=state.db.transaction('projects',mode),store=tx.objectStore('projects');let req=fn(store);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
-  async function saveProject(){try{await dbTask('readwrite',s=>s.put(clone(state.project)));localStorage.setItem('whiteboard-current',state.project.id);$('#saveStatus').textContent='Saved locally';}catch(e){$('#saveStatus').textContent='Could not save';toast('This project could not be saved. Check your browser storage.');}}
+  async function saveProject(){try{await dbTask('readwrite',s=>s.put(storedProject(state.project)));localStorage.setItem('whiteboard-current',state.project.id);$('#saveStatus').textContent='Saved locally';}catch(e){$('#saveStatus').textContent='Could not save';toast('This project could not be saved. Check your browser storage.');}}
   async function migrateProject(p){
     for(const s of p.scenes)for(const it of s.items){
       if(it.animation==='reveal')it.animation='draw';
@@ -656,8 +837,11 @@
     }
     return p;
   }
-  function prepareHandwriting(){for(const s of state.project.scenes)for(const it of s.items)if(it.type==='text'&&HANDWRITING_FONTS[it.font]&&it.handwritingSignature!==textSignature(it))scheduleHandwriting(it);}
-  async function ensureHandwriting(){const pending=[];for(const s of state.project.scenes)for(const it of s.items)if(it.type==='text'&&HANDWRITING_FONTS[it.font]&&it.handwritingSignature!==textSignature(it)){clearTimeout(textTimers.get(it.id));pending.push(refreshHandwriting(it));}await Promise.all(pending);}
+  // Per-letter reveal data is rebuilt from the text when a project opens, so it is left out of saved projects and backups.
+  const needsHandwriting=it=>it.type==='text'&&HANDWRITING_FONTS[it.font]&&(it.handwritingSignature!==textSignature(it)||!it.letters);
+  const storedProject=p=>JSON.parse(JSON.stringify(p,(k,v)=>k==='letters'?undefined:v));
+  function prepareHandwriting(){for(const s of state.project.scenes)for(const it of s.items)if(needsHandwriting(it))scheduleHandwriting(it);}
+  async function ensureHandwriting(){const pending=[];for(const s of state.project.scenes)for(const it of s.items)if(needsHandwriting(it)){clearTimeout(textTimers.get(it.id));pending.push(refreshHandwriting(it));}await Promise.all(pending);}
   async function loadProject(projectId){pause();let p=await dbTask('readonly',s=>s.get(projectId));if(!p)return;state.project=await migrateProject(p);state.editorView=projectView(state.project);state.sceneIndex=0;state.selected=null;state.time=0;state.preview=false;state.previewCameraBox=null;state.audio=null;state.undo=[];state.redo=[];localStorage.setItem('whiteboard-current',p.id);closeModal();renderAll();prepareHandwriting();await saveProject();}
   async function listProjects(){return (await dbTask('readonly',s=>s.getAll())).sort((a,b)=>b.updated-a.updated);}
   function modal(html){$('#modal').innerHTML=`<div class="modal-card">${html}</div>`;$('#modal').classList.remove('hidden');}
@@ -858,7 +1042,7 @@
   }
   function bind(){
     document.querySelectorAll('.tool').forEach(b=>b.addEventListener('click',()=>{stopPreview();state.tool=b.dataset.tool;state.selected=null;if(state.tool==='text')addText();else if(state.tool==='upload')$('#uploadInput').click();else if(state.tool==='camera')addCamera();else{renderAll();}}));
-    $('#inspector').addEventListener('click',e=>{const icon=e.target.closest('[data-icon]'),sheet=e.target.closest('[data-sheet-item]'),shape=e.target.closest('[data-shape]'),ratio=e.target.closest('[data-ratio]'),act=e.target.closest('[data-action]');if(icon)addIcon(icon.dataset.icon);if(sheet)addSheetDrawing(+sheet.dataset.sheet,+sheet.dataset.sheetItem);if(shape)addShape(shape.dataset.shape);if(ratio){snapshot();state.project.ratio=ratio.dataset.ratio;changed();}if(act)action(act.dataset.action);});
+    $('#inspector').addEventListener('click',e=>{const icon=e.target.closest('[data-icon]'),sheet=e.target.closest('[data-sheet-item]'),shape=e.target.closest('[data-shape]'),ratio=e.target.closest('[data-ratio]'),align=e.target.closest('[data-align]'),act=e.target.closest('[data-action]');if(align){const it=item();if(it?.type==='text'&&(it.align||'left')!==align.dataset.align){snapshot();it.align=align.dataset.align;scheduleHandwriting(it);changed();}}if(icon)addIcon(icon.dataset.icon);if(sheet)addSheetDrawing(+sheet.dataset.sheet,+sheet.dataset.sheetItem);if(shape)addShape(shape.dataset.shape);if(ratio){snapshot();state.project.ratio=ratio.dataset.ratio;changed();}if(act)action(act.dataset.action);});
     $('#inspector').addEventListener('focusin',e=>{if(e.target.matches('[data-set]'))snapshot();});
     $('#inspector').addEventListener('input',e=>{if(e.target.id==='librarySearch')filterLibrary(e.target.value);else if(e.target.matches('[data-set]'))applyField(e.target.dataset.set,e.target.value);});
     $('#inspector').addEventListener('change',e=>{if(e.target.matches('[data-set]')){applyField(e.target.dataset.set,e.target.value);renderInspector();}});
@@ -886,11 +1070,11 @@
     $('#projectName').addEventListener('focus',()=>snapshot());$('#projectName').addEventListener('input',e=>{state.project.name=e.target.value.slice(0,80);changed(false);});
     $('#addSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();state.project.scenes.push({id:id(),name:`Scene ${state.project.scenes.length+1}`,background:'#ffffff',items:[]});state.sceneIndex=state.project.scenes.length-1;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
     $('#duplicateSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();const copy=clone(scene());copy.id=id();copy.name+=` copy`;copy.items.forEach(x=>x.id=id());state.project.scenes.splice(state.sceneIndex+1,0,copy);state.sceneIndex++;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
-    $('#playBtn').addEventListener('click',play);$('#previewBtn').addEventListener('click',()=>{if(state.playing)pause();else play();});$('#restartBtn').addEventListener('click',()=>seek(0));$('#fitBtn').addEventListener('click',fitContent);$('#zoomInBtn').addEventListener('click',()=>zoomEditor(.8));$('#zoomOutBtn').addEventListener('click',()=>zoomEditor(1.25));
+    $('#playBtn').addEventListener('click',play);$('#previewBtn').addEventListener('click',()=>{if(state.playing)pause();else play();});$('#restartBtn').addEventListener('click',()=>seek(0));$('#stopBtn').addEventListener('click',stop);$('#topStopBtn').addEventListener('click',stop);$('#fitBtn').addEventListener('click',fitContent);$('#zoomInBtn').addEventListener('click',()=>zoomEditor(.8));$('#zoomOutBtn').addEventListener('click',()=>zoomEditor(1.25));
     $('#scrubber').addEventListener('input',e=>seek(+e.target.value/1000*totalLen()));$('#exportBtn').addEventListener('click',exportVideo);$('#projectsBtn').addEventListener('click',showProjects);
     $('#uploadInput').addEventListener('change',async e=>{await uploadImage(e.target.files[0]);e.target.value='';});$('#audioInput').addEventListener('change',async e=>{await uploadAudio(e.target.files[0]);e.target.value='';});$('#projectBackupInput').addEventListener('change',async e=>{await importProjectBackup(e.target.files[0]);e.target.value='';});
     $('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){if(!state.exporting)closeModal();return;}const b=e.target.closest('[data-modal],[data-open],[data-delete-project]');if(!b)return;if(b.dataset.deleteProject)deleteProject(b.dataset.deleteProject);else if(b.dataset.open)loadProject(b.dataset.open);else if(b.dataset.modal==='close'&&!state.exporting)closeModal();else if(b.dataset.modal==='new')showNewProject();else if(b.dataset.modal==='create')createProject();else if(b.dataset.modal==='backup')downloadProjectBackup();else if(b.dataset.modal==='import')$('#projectBackupInput').click();});
-    document.addEventListener('keydown',e=>{const typing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(e.ctrlKey||e.metaKey){if(e.key.toLowerCase()==='z'){e.preventDefault();if(state.undo.length){state.redo.push(clone(state.project));state.project=state.undo.pop();state.sceneIndex=clamp(state.sceneIndex,0,state.project.scenes.length-1);state.selected=null;changed();}return;}if(e.key.toLowerCase()==='y'){e.preventDefault();if(state.redo.length){state.undo.push(clone(state.project));state.project=state.redo.pop();state.sceneIndex=clamp(state.sceneIndex,0,state.project.scenes.length-1);state.selected=null;changed();}return;}}if(typing)return;if(e.code==='Space'){e.preventDefault();play();}if((e.key==='Delete'||e.key==='Backspace')&&state.selected){e.preventDefault();action('delete');}if(e.key==='Escape'&&state.preview)stopPreview();});
+    document.addEventListener('keydown',e=>{const typing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(e.ctrlKey||e.metaKey){if(e.key.toLowerCase()==='z'){e.preventDefault();if(state.undo.length){state.redo.push(clone(state.project));state.project=state.undo.pop();state.sceneIndex=clamp(state.sceneIndex,0,state.project.scenes.length-1);state.selected=null;changed();}return;}if(e.key.toLowerCase()==='y'){e.preventDefault();if(state.redo.length){state.undo.push(clone(state.project));state.project=state.redo.pop();state.sceneIndex=clamp(state.sceneIndex,0,state.project.scenes.length-1);state.selected=null;changed();}return;}}if(typing)return;if(e.code==='Space'){e.preventDefault();play();}if((e.key==='Delete'||e.key==='Backspace')&&state.selected){e.preventDefault();action('delete');}if(e.key==='Escape'&&state.preview)stop();});
     window.addEventListener('beforeunload',()=>{if(state.project)saveProject();});
   }
   async function init(){try{

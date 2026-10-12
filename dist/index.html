@@ -16,6 +16,7 @@
       <div class="top-actions">
         <button id="projectsBtn" class="button ghost">My projects</button>
         <button id="previewBtn" class="button subtle">▶ <span>Preview</span></button>
+        <button id="topStopBtn" class="button subtle" title="Stop and go back to the start">■ <span>Stop</span></button>
         <button id="exportBtn" class="button primary">Export video ↗</button>
       </div>
     </header>
@@ -51,7 +52,7 @@
     <section class="timeline-area">
       <div class="timeline-header">
         <div class="timeline-title"><strong>Timeline</strong><span id="durationLabel">00:00</span></div>
-        <div class="timeline-play"><button id="restartBtn" class="mini-button" title="Restart">↶</button><button id="playBtn" class="play-button" title="Play or pause">▶</button><span id="timeLabel">00:00 / 00:00</span></div>
+        <div class="timeline-play"><button id="restartBtn" class="mini-button" title="Restart">↶</button><button id="playBtn" class="play-button" title="Play or pause">▶</button><button id="stopBtn" class="mini-button stop-button" title="Stop and go back to the start">■</button><span id="timeLabel">00:00 / 00:00</span></div>
         <div class="timeline-actions"><button id="addSceneBtn" class="button subtle small">+ Scene</button><button id="duplicateSceneBtn" class="button ghost small">Duplicate</button></div>
       </div>
       <div class="timeline-body"><div id="sceneStrip" class="scene-strip"></div><div class="tracks"><div class="track-label">DRAW ORDER <span>Drag to reorder</span></div><div id="itemStrip" class="item-strip"></div><div class="audio-track"><span>♫ AUDIO</span><span id="audioTrackLabel">Add narration or music from the Audio tool</span></div></div></div>
