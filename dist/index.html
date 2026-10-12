@@ -24,6 +24,7 @@
       <aside class="leftbar">
         <div class="section-label">CREATE</div>
         <button class="tool active" data-tool="select"><span>↖</span><small>Select</small></button>
+        <button class="tool" data-tool="pan"><span>✋</span><small>Pan</small></button>
         <button class="tool" data-tool="text"><span>Ｔ</span><small>Text</small></button>
         <button class="tool" data-tool="icon"><span>✎</span><small>Drawings</small></button>
         <button class="tool" data-tool="shape"><span>▢</span><small>Shapes</small></button>
@@ -35,13 +36,13 @@
       <main class="main">
         <div class="stage-top">
           <div class="stage-title"><span class="eyebrow">SCENE <span id="sceneNumber">01</span></span><span id="sceneTitle">The big idea</span></div>
-          <div class="stage-controls"><span id="formatLabel">16:9 · Landscape</span><button id="fitBtn" class="icon-button" title="Fit canvas">⌗</button></div>
+          <div class="stage-controls"><span id="formatLabel">16:9 · Landscape</span><button id="zoomOutBtn" class="icon-button" title="Zoom out">−</button><span id="zoomLabel">100%</span><button id="zoomInBtn" class="icon-button" title="Zoom in">+</button><button id="fitBtn" class="icon-button" title="Fit content">⌗</button></div>
         </div>
         <div id="canvasShell" class="canvas-shell">
           <svg id="stage" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" aria-label="Video canvas"></svg>
           <div id="emptyHint" class="empty-hint hidden">Choose a tool on the left to start your scene.</div>
         </div>
-        <div class="stage-footer"><span><i class="status-dot"></i> <span id="modeLabel">Editing canvas</span></span><span>Drag objects to arrange your story</span></div>
+        <div class="stage-footer"><span><i class="status-dot"></i> <span id="modeLabel">Editing whiteboard</span></span><span>Click artwork to select · Drag handles to resize · Pan to explore</span></div>
       </main>
 
       <aside class="inspector" id="inspector"></aside>
