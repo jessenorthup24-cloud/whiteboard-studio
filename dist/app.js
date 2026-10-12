@@ -419,55 +419,168 @@
       addItem({...baseItem('image'),label:name,src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,sheetRef:[sheetIndex,drawingIndex],cropVersion:2,w,h,duration:2.2});toast(`${name} added to the canvas.`);
     }catch(e){console.error(e);toast('Could not add that illustration.');}
   }
-  const glyphTraceCache=new Map();
-  function traceGlyphStrokes(character,family,size){
-    const key=`${family}:${size}:${character}`;if(glyphTraceCache.has(key))return glyphTraceCache.get(key);
-    const pad=8,canvas=document.createElement('canvas'),ctx=canvas.getContext('2d',{willReadFrequently:true});
+  const GLYPH_TRACE_SIZE=160,glyphTraceCache=new Map();
+  function simplifyStroke(pts,eps){
+    if(pts.length<3)return pts;
+    const keep=new Uint8Array(pts.length),stack=[[0,pts.length-1]];keep[0]=keep[pts.length-1]=1;
+    while(stack.length){
+      const [a,b]=stack.pop(),[ax,ay]=pts[a],dx=pts[b][0]-ax,dy=pts[b][1]-ay,len=Math.hypot(dx,dy);let far=-1,best=eps;
+      for(let i=a+1;i<b;i++){const d=len<1e-6?Math.hypot(pts[i][0]-ax,pts[i][1]-ay):Math.abs((pts[i][0]-ax)*dy-(pts[i][1]-ay)*dx)/len;if(d>best){best=d;far=i;}}
+      if(far>=0){keep[far]=1;stack.push([a,far],[far,b]);}
+    }
+    return pts.filter((_,i)=>keep[i]);
+  }
+  function relaxStroke(pts,passes){
+    let p=pts;for(let k=0;k<passes;k++)p=p.map((q,i)=>i===0||i===p.length-1?q:[(p[i-1][0]+q[0]*2+p[i+1][0])/4,(p[i-1][1]+q[1]*2+p[i+1][1])/4]);
+    return p;
+  }
+  function strokePathData(pts){
+    const f=n=>n.toFixed(1);
+    if(pts.length===1)return `M${f(pts[0][0])} ${f(pts[0][1])} L${f(pts[0][0]+.1)} ${f(pts[0][1])}`;
+    let d=`M${f(pts[0][0])} ${f(pts[0][1])}`;
+    for(let i=1;i<pts.length-1;i++)d+=` Q${f(pts[i][0])} ${f(pts[i][1])} ${f((pts[i][0]+pts[i+1][0])/2)} ${f((pts[i][1]+pts[i+1][1])/2)}`;
+    const last=pts[pts.length-1];return d+` L${f(last[0])} ${f(last[1])}`;
+  }
+  // Traces a letter at a fixed size into ordered pen strokes. Coordinates are in GLYPH_TRACE_SIZE pixels from the
+  // fillText origin (textBaseline top); w is the full pen width needed to uncover the letter along that stroke.
+  function traceGlyphStrokes(character,family){
+    const key=`${family}:${character}`;if(glyphTraceCache.has(key))return glyphTraceCache.get(key);
+    const size=GLYPH_TRACE_SIZE,pad=Math.ceil(size*.4),canvas=document.createElement('canvas'),ctx=canvas.getContext('2d',{willReadFrequently:true});
     ctx.font=`${size}px "${family}"`;const advance=ctx.measureText(character).width;
-    canvas.width=Math.ceil(advance+pad*3+size*.25);canvas.height=Math.ceil(size*1.55+pad*2);
-    ctx.font=`${size}px "${family}"`;ctx.textBaseline='top';ctx.fillStyle='#000';ctx.fillText(character,pad,pad);
-    const {width,height}=canvas,pixels=ctx.getImageData(0,0,width,height).data,bits=new Uint8Array(width*height);let area=0;
-    for(let i=0;i<bits.length;i++)if(pixels[i*4+3]>90){bits[i]=1;area++;}
-    const neighbors=(i)=>[i-width,i-width+1,i+1,i+width+1,i+width,i+width-1,i-1,i-width-1];
-    for(let iteration=0;iteration<36;iteration++){
-      let changed=false;
+    canvas.width=Math.ceil(advance+pad*2);canvas.height=Math.ceil(size*1.5+pad*2);
+    ctx.font=`${size}px "${family}"`;ctx.textBaseline='top';ctx.fillText(character,pad,pad);
+    const W=canvas.width,H=canvas.height,N=W*H,alpha=ctx.getImageData(0,0,W,H).data,ink=new Uint8Array(N);
+    for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const i=y*W+x;ink[i]=alpha[i*4+3]>110?1:0;}
+    // Distance to the nearest blank pixel is the local half-width of the letter.
+    const dist=new Float32Array(N);for(let i=0;i<N;i++)dist[i]=ink[i]?1e6:0;
+    for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const i=y*W+x;if(ink[i])dist[i]=Math.min(dist[i],dist[i-1]+1,dist[i-W]+1,dist[i-W-1]+1.414,dist[i-W+1]+1.414);}
+    for(let y=H-2;y>0;y--)for(let x=W-2;x>0;x--){const i=y*W+x;if(ink[i])dist[i]=Math.min(dist[i],dist[i+1]+1,dist[i+W]+1,dist[i+W+1]+1.414,dist[i+W-1]+1.414);}
+    // Zhang-Suen thinning leaves a one-pixel centerline.
+    const sk=ink.slice(),off=[-W,-W+1,1,W+1,W,W-1,-1,-W-1],n=new Uint8Array(8);
+    for(let changed=true;changed;){
+      changed=false;
       for(let pass=0;pass<2;pass++){
         const remove=[];
-        for(let y=1;y<height-1;y++)for(let x=1;x<width-1;x++){
-          const i=y*width+x;if(!bits[i])continue;const n=neighbors(i).map(j=>bits[j]),count=n.reduce((a,b)=>a+b,0);
+        for(let i=W+1;i<N-W-1;i++){
+          if(!sk[i])continue;let count=0,transitions=0;
+          for(let k=0;k<8;k++){n[k]=sk[i+off[k]];count+=n[k];}
           if(count<2||count>6)continue;
-          let transitions=0;for(let k=0;k<8;k++)if(!n[k]&&n[(k+1)%8])transitions++;
+          for(let k=0;k<8;k++)if(!n[k]&&n[(k+1)&7])transitions++;
           if(transitions!==1)continue;
-          if(pass===0?(n[0]*n[2]*n[4]||n[2]*n[4]*n[6]):(n[0]*n[2]*n[6]||n[0]*n[4]*n[6]))continue;
+          if(pass===0?(n[0]&&n[2]&&n[4])||(n[2]&&n[4]&&n[6]):(n[0]&&n[2]&&n[6])||(n[0]&&n[4]&&n[6]))continue;
           remove.push(i);
         }
-        for(const i of remove)bits[i]=0;if(remove.length)changed=true;
+        for(const i of remove)sk[i]=0;if(remove.length)changed=true;
       }
-      if(!changed)break;
     }
-    const points=[];for(let i=0;i<bits.length;i++)if(bits[i])points.push(i);
-    const adjacent=(i)=>neighbors(i).filter(j=>bits[j]);
-    const edgeKey=(a,b)=>a<b?`${a}:${b}`:`${b}:${a}`,seen=new Set(),chains=[];
-    const walk=(a,b)=>{const chain=[a,b];seen.add(edgeKey(a,b));let prev=a,cur=b;
-      for(let step=0;step<width*height;step++){
-        const next=adjacent(cur).find(j=>j!==prev&&!seen.has(edgeKey(cur,j)));
-        if(next==null)break;seen.add(edgeKey(cur,next));chain.push(next);prev=cur;cur=next;
-        if(adjacent(cur).length!==2||cur===a)break;
+    // Build a graph: clusters of end/junction pixels become nodes, runs of two-neighbor pixels become edges.
+    const at=i=>[i%W-pad,Math.floor(i/W)-pad],pixels=[],degree=new Uint8Array(N),nodeOf=new Int32Array(N).fill(-1),nodes=[];
+    for(let i=0;i<N;i++)if(sk[i]){pixels.push(i);for(const o of off)degree[i]+=sk[i+o];}
+    for(const i of pixels)if(degree[i]!==2&&nodeOf[i]<0){
+      const queue=[i],idx=nodes.length;nodeOf[i]=idx;let sx=0,sy=0,r=0;
+      for(let q=0;q<queue.length;q++){const p=queue[q];sx+=p%W;sy+=Math.floor(p/W);r=Math.max(r,dist[p]);for(const o of off){const j=p+o;if(sk[j]&&degree[j]!==2&&nodeOf[j]<0){nodeOf[j]=idx;queue.push(j);}}}
+      nodes.push({x:sx/queue.length-pad,y:sy/queue.length-pad,r,pixels:queue});
+    }
+    const visited=new Uint8Array(N),edges=[];
+    const follow=(from,start,first)=>{
+      const pts=[[nodes[from].x,nodes[from].y]];let prev=start,cur=first,w=0;
+      for(;;){
+        if(nodeOf[cur]>=0){const to=nodes[nodeOf[cur]];pts.push([to.x,to.y]);return {a:from,b:nodeOf[cur],pts,w:w||Math.max(nodes[from].r,to.r)};}
+        visited[cur]=1;pts.push(at(cur));w=Math.max(w,dist[cur]);
+        let next=-1;for(const o of off){const j=cur+o;if(sk[j]&&j!==prev&&!visited[j]){next=j;break;}}
+        if(next<0)return null;prev=cur;cur=next;
       }
-      chains.push(chain);
     };
-    for(const i of points)if(adjacent(i).length!==2)for(const j of adjacent(i))if(!seen.has(edgeKey(i,j)))walk(i,j);
-    for(const i of points)for(const j of adjacent(i))if(!seen.has(edgeKey(i,j)))walk(i,j);
-    if(!chains.length&&points.length)chains.push([points[0],points[0]]);
-    let length=0;for(const chain of chains)for(let k=1;k<chain.length;k++){const a=chain[k-1],b=chain[k];length+=Math.hypot(a%width-b%width,Math.floor(a/width)-Math.floor(b/width));}
-    const stroke=clamp(area/Math.max(1,length)*1.5,3,size*.42);
-    const paths=chains.filter(chain=>chain.length>=2).map(chain=>{
-      const reduced=chain.filter((_,i)=>i===0||i===chain.length-1||i%2===0);
-      return 'M'+reduced.map(i=>`${(i%width-pad).toFixed(1)} ${(Math.floor(i/width)-pad).toFixed(1)}`).join(' L');
-    });
-    const result={advance,paths,stroke};glyphTraceCache.set(key,result);if(glyphTraceCache.size>500)glyphTraceCache.clear();return result;
+    nodes.forEach((node,k)=>{for(const p of node.pixels)for(const o of off){const j=p+o;if(sk[j]&&nodeOf[j]<0&&!visited[j]){const e=follow(k,p,j);if(e)edges.push(e);}}});
+    for(const i of pixels)if(!visited[i]&&nodeOf[i]<0){
+      // A closed bowl such as "o" starts at its top and is written counter-clockwise.
+      const idx=nodes.length,start=at(i);nodes.push({x:start[0],y:start[1],r:dist[i],pixels:[i]});
+      const pts=[start];let prev=i,cur=off.map(o=>i+o).filter(j=>sk[j]).sort((a,b)=>a%W-b%W)[0],w=dist[i];visited[i]=1;
+      while(cur!=null&&!visited[cur]){visited[cur]=1;pts.push(at(cur));w=Math.max(w,dist[cur]);const p=prev;prev=cur;cur=off.map(o=>prev+o).find(j=>sk[j]&&j!==p&&!visited[j]);}
+      pts.push(start);edges.push({a:idx,b:idx,pts,w});
+    }
+    const lengthOf=pts=>{let s=0;for(let k=1;k<pts.length;k++)s+=Math.hypot(pts[k][0]-pts[k-1][0],pts[k][1]-pts[k-1][1]);return s;};
+    for(const e of edges)e.length=lengthOf(e.pts);
+    const touched=new Set(edges.flatMap(e=>[e.a,e.b]));
+    let live=edges.filter(e=>!(e.a===e.b&&e.length<6));
+    const direction=(seq,fromEnd)=>{
+      const s=fromEnd?[...seq].reverse():seq,[x0,y0]=s[0];let p=s[s.length-1];
+      for(const q of s)if(Math.hypot(q[0]-x0,q[1]-y0)>=8){p=q;break;}
+      return fromEnd?[x0-p[0],y0-p[1]]:[p[0]-x0,p[1]-y0];
+    };
+    // The centerline stops about half a pen width short of each free end; carry it on to the letter's edge.
+    const inkAt=(x,y)=>ink[Math.round(y+pad)*W+Math.round(x+pad)];
+    const tipOf=(seq)=>{const [dx,dy]=direction(seq,true),len=Math.hypot(dx,dy);let [x,y]=seq[seq.length-1];if(!len)return [x,y];
+      for(let step=0;step<size;step++){const nx=x+dx/len*.5,ny=y+dy/len*.5;if(!inkAt(nx,ny))break;x=nx;y=ny;}return [x,y];};
+    {const deg=nodes.map(()=>0);for(const e of live){deg[e.a]++;deg[e.b]++;}
+      for(const e of live){if(e.a===e.b)continue;if(deg[e.b]===1)e.pts.push(nodes[e.b].tip=tipOf(e.pts));if(deg[e.a]===1)e.pts.unshift(nodes[e.a].tip=tipOf([...e.pts].reverse()));}}
+    // Thinning leaves short spurs where a stroke bends or joins. A spur's true end barely reaches past the joint's
+    // own thickness; remove those so they are not written as extra strokes.
+    for(let pruned=true;pruned;){
+      pruned=false;const deg=nodes.map(()=>0);for(const e of live){deg[e.a]++;deg[e.b]++;}
+      live=live.filter(e=>{
+        if(e.a===e.b)return true;const tipA=deg[e.a]===1,tipB=deg[e.b]===1;if(tipA===tipB)return true;
+        const joint=nodes[tipA?e.b:e.a],end=nodes[tipA?e.a:e.b].tip||[nodes[tipA?e.a:e.b].x,nodes[tipA?e.a:e.b].y];
+        if(deg[tipA?e.b:e.a]<3||Math.hypot(end[0]-joint.x,end[1]-joint.y)>=joint.r*1.3+3)return true;
+        deg[e.a]--;deg[e.b]--;pruned=true;return false;
+      });
+    }
+    // Connected pieces: main letter bodies first, left to right, then small marks such as dots.
+    const parent=nodes.map((_,k)=>k),root=k=>parent[k]===k?k:(parent[k]=root(parent[k]));
+    for(const e of live)parent[root(e.a)]=root(e.b);
+    const groups=new Map();for(const e of live){const g=root(e.a);if(!groups.has(g))groups.set(g,[]);groups.get(g).push(e);}
+    const pieces=[...groups.values()].map(list=>{const pts=list.flatMap(e=>e.pts);return {edges:list,length:list.reduce((s,e)=>s+e.length,0),x:Math.min(...pts.map(p=>p[0])),y:Math.min(...pts.map(p=>p[1]))};});
+    nodes.forEach((node,k)=>{if(!touched.has(k))pieces.push({dot:node,length:0,x:node.x,y:node.y});});
+    const longest=Math.max(0,...pieces.map(p=>p.length)),major=p=>p.length>=longest*.35&&!p.dot;
+    pieces.sort((a,b)=>major(b)-major(a)||(Math.abs(a.x-b.x)>size*.08?a.x-b.x:a.y-b.y));
+    const turn=(u,v)=>{const lu=Math.hypot(...u),lv=Math.hypot(...v);return lu&&lv?Math.acos(clamp((u[0]*v[0]+u[1]*v[1])/(lu*lv),-1,1)):0;};
+    const strokes=[];
+    for(const piece of pieces){
+      if(piece.dot){strokes.push({pts:[[piece.dot.x,piece.dot.y]],w:Math.max(piece.dot.r,1.5)*2+1.5});continue;}
+      const unused=new Set(piece.edges);let pen=null;
+      const incident=k=>[...unused].filter(e=>e.a===k||e.b===k);
+      while(unused.size){
+        const ends=[...new Set([...unused].flatMap(e=>[e.a,e.b]))];
+        const score=k=>{const nd=nodes[k],odd=incident(k).reduce((s,e)=>s+(e.a===e.b?2:1),0)%2;
+          return (pen?nd.y+nd.x*.5+Math.hypot(nd.x-pen[0],nd.y-pen[1])*.3:nd.x+nd.y*.8)+(odd?0:size*.6);};
+        let cur=ends.reduce((best,k)=>score(k)<score(best)?k:best);
+        const pts=[];let heading=null,w=0,last=null;
+        for(;;){
+          // At a junction keep the pen going as straight as possible.
+          let pick=null,best=Infinity;
+          for(const e of incident(cur))for(const forward of e.a===e.b?(heading?[true,false]:[true]):[e.a===cur]){
+            const seq=forward?e.pts:[...e.pts].reverse(),bend=heading?turn(heading,direction(seq,false)):turn([.35,1],direction(seq,false));
+            if(bend<best){best=bend;pick={e,seq};}
+          }
+          if(!pick){
+            // After a short run into a peak, such as the points of "M", come back down it instead of lifting the pen.
+            if(last&&last.e.a!==last.e.b&&last.e.length<size*.3&&incident(last.from).length){const back=[...last.seq].reverse();pts.push(...back.slice(1));heading=direction(back,true);cur=last.from;last=null;continue;}
+            break;
+          }
+          unused.delete(pick.e);pts.push(...(pts.length?pick.seq.slice(1):pick.seq));w=Math.max(w,pick.e.w);heading=direction(pick.seq,true);
+          last={...pick,from:cur};cur=pick.e.a===cur?pick.e.b:pick.e.a;
+        }
+        strokes.push({pts:simplifyStroke(relaxStroke(pts,3),.7),w:w*2+1.5});pen=pts[pts.length-1];
+      }
+    }
+    // Patch any part of the letter the strokes would leave hidden, right after the stroke nearest to it.
+    const cover=document.createElement('canvas');cover.width=W;cover.height=H;
+    const cc=cover.getContext('2d',{willReadFrequently:true});cc.lineCap='round';cc.lineJoin='round';cc.translate(pad,pad);
+    for(const s of strokes){cc.lineWidth=s.w;cc.stroke(new Path2D(strokePathData(s.pts)));}
+    const covered=cc.getImageData(0,0,W,H).data,seen=new Uint8Array(N),patches=[];
+    for(let i=0;i<N;i++)if(ink[i]&&!seen[i]&&covered[i*4+3]<100){
+      const queue=[i];seen[i]=1;
+      for(let q=0;q<queue.length;q++)for(const o of [-1,1,-W,W]){const j=queue[q]+o;if(ink[j]&&!seen[j]&&covered[j*4+3]<100){seen[j]=1;queue.push(j);}}
+      if(queue.length<6)continue;
+      const d2=(a,b)=>(a%W-b%W)**2+(Math.floor(a/W)-Math.floor(b/W))**2,far=from=>queue.reduce((best,p)=>d2(p,from)>d2(best,from)?p:best,from);
+      const a=far(queue[0]),b=far(a),pts=[at(a),at(b)],w=Math.max(...queue.map(p=>dist[p]))*2+2;
+      let near=0,gap=Infinity;strokes.forEach((s,k)=>{for(const p of s.pts){const g=Math.hypot(p[0]-pts[0][0],p[1]-pts[0][1]);if(g<gap){gap=g;near=k;}}});
+      patches.push({near,stroke:{pts,w}});
+    }
+    for(const p of patches.sort((a,b)=>b.near-a.near))strokes.splice(p.near+1,0,p.stroke);
+    const result={advance,strokes};glyphTraceCache.set(key,result);if(glyphTraceCache.size>500)glyphTraceCache.clear();return result;
   }
-  function textSignature(it){return JSON.stringify(['letter-strokes-1',it.text,it.font,it.fontSize,it.color,it.w,it.h]);}
+  function textSignature(it){return JSON.stringify(['letter-strokes-2',it.text,it.font,it.fontSize,it.color,it.w,it.h]);}
   async function refreshHandwriting(it){
     if(!HANDWRITING_FONTS[it.font])return;
     const signature=textSignature(it),family=HANDWRITING_FONTS[it.font],rows=String(it.text||'').split('\n').slice(0,8);
@@ -485,11 +598,8 @@
         for(const char of row){
           if(!/\s/u.test(char)){
             ctx.fillText(char,left,top);
-            const glyph=traceGlyphStrokes(char,family,size);
-            for(const d of glyph.paths){
-              const translated=d.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g,(_,x,y)=>`${((left+Number(x))*fit).toFixed(1)} ${(top+Number(y)).toFixed(1)}`);
-              letterPaths.push({d:translated,sw:glyph.stroke});
-            }
+            const glyph=traceGlyphStrokes(char,family),k=size/GLYPH_TRACE_SIZE;
+            for(const s of glyph.strokes)letterPaths.push({d:strokePathData(s.pts.map(([x,y])=>[(left+x*k)*fit,top+y*k])),sw:+(s.w*k).toFixed(2)});
           }
           left+=ctx.measureText(char).width;
         }
