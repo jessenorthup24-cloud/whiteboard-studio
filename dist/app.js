@@ -21,9 +21,20 @@
   };
   const iconKeys = Object.keys(ICONS);
   // Fonts whose letters join; they are written word by word without lifting the pen between letters.
-  const CONNECTED_FONTS=new Set(['dancing','satisfy','homemade']);
-  const HANDWRITING_FONTS = {dancing:'Dancing Script',satisfy:'Satisfy',homemade:'Homemade Apple',patrick:'Patrick Hand',kalam:'Kalam',indie:'Indie Flower',caveat:'Caveat',gochi:'Gochi Hand',handlee:'Handlee',architects:'Architects Daughter',shadows:'Shadows Into Light',gloria:'Gloria Hallelujah',permanent:'Permanent Marker'};
-  const FONT_OPTIONS = [['patrick','Classic whiteboard · Patrick Hand'],['kalam','Natural marker · Kalam'],['indie','Casual hand · Indie Flower'],['caveat','Flowing hand · Caveat'],['gochi','Playful marker · Gochi Hand'],['handlee','Neat hand · Handlee'],['architects','Architect hand'],['shadows','Light hand · Shadows Into Light'],['gloria','Lively hand · Gloria Hallelujah'],['permanent','Heavy marker · Permanent Marker'],['dancing','Connected cursive · Dancing Script'],['satisfy','Connected script · Satisfy'],['homemade','Handwritten cursive · Homemade Apple'],['futural','Simple stroke'],['futuram','Bold stroke'],['scripts','Script stroke'],['scriptc','Bold script stroke'],['cursive','Cursive stroke'],['gothiceng','Gothic stroke'],['gothicita','Gothic italic stroke'],['timesr','Serif stroke'],['timesi','Italic serif stroke'],['timesrb','Bold serif stroke']];
+  const CONNECTED_FONTS=new Set(['dancing','satisfy','homemade','pacifico','kaushan','yellowtail','greatvibes','sacramento']);
+  // Writing styles, grouped so each kind of lettering is easy to tell apart in the picker: [key, font, what it looks like].
+  // The smooth fonts are Google Fonts (Open Font License, free to use in videos); the single-line pen fonts are the
+  // bundled Hershey glyphs, written as one stroke per line.
+  const FONT_GROUPS=[
+    ['Neat handwriting',[['patrick','Patrick Hand','Classic whiteboard'],['handlee','Handlee','Neat and round'],['kalam','Kalam','Natural marker'],['architects','Architects Daughter','Architect print'],['coming','Coming Soon','Friendly print'],['schoolbell','Schoolbell','Teacher on the board']]],
+    ['Casual & marker',[['indie','Indie Flower','Bubbly hand'],['gochi','Gochi Hand','Playful marker'],['gloria','Gloria Hallelujah','Lively doodle'],['shadows','Shadows Into Light','Light, quick hand'],['caveat','Caveat','Flowing notes'],['covered','Covered By Your Grace','Loose and tall'],['reenie','Reenie Beanie','Scribbled note'],['nanum','Nanum Pen Script','Thin felt pen'],['justhand','Just Another Hand','Tall and narrow'],['permanent','Permanent Marker','Heavy marker'],['rocksalt','Rock Salt','Rough, scratchy marker']]],
+    ['Cursive & script',[['dancing','Dancing Script','Joined cursive'],['satisfy','Satisfy','Joined script'],['homemade','Homemade Apple','Handwritten cursive'],['pacifico','Pacifico','Bold retro script'],['kaushan','Kaushan Script','Brush script'],['yellowtail','Yellowtail','Sign-painter script'],['greatvibes','Great Vibes','Elegant calligraphy'],['sacramento','Sacramento','Thin monoline script']]],
+    ['Bold & playful',[['bangers','Bangers','Comic book'],['luckiest','Luckiest Guy','Chunky cartoon'],['chewy','Chewy','Soft and bouncy'],['fredoka','Fredoka','Rounded and friendly']]],
+    ['Chalk & sketch',[['fredericka','Fredericka the Great','Chalk outline'],['cabinsketch','Cabin Sketch','Sketched letters']]],
+    ['Classic & formal',[['playfair','Playfair Display','Elegant serif'],['cinzel','Cinzel','Carved Roman capitals'],['fell','IM Fell English','Old printed book'],['elite','Special Elite','Typewriter'],['montserrat','Montserrat','Clean modern sans']]],
+    ['Single-line pen',[['futural','Simple','Plain pen line'],['futuram','Bold','Doubled pen line'],['scripts','Script','Joined script line'],['scriptc','Bold script','Doubled script line'],['gothiceng','Gothic','Blackletter line'],['gothicita','Gothic italic','Italic blackletter'],['timesr','Serif','Book serif line'],['timesi','Italic serif','Slanted serif line'],['timesrb','Bold serif','Heavy serif line']]]
+  ];
+  const HANDWRITING_FONTS=Object.fromEntries(FONT_GROUPS.slice(0,-1).flatMap(([,list])=>list.map(([key,family])=>[key,family])));
   const SHEETS = [
     {name:'People',file:'people.png',items:['Man','Woman','Girl','Boy']},
     {name:'Nature',file:'nature.png',items:['Bush','Tree','Flower','Leaf']},
@@ -136,26 +147,53 @@
   const SCRIPT_STROKE_FONTS={scripts:true,cursive:true,scriptc:false},scriptGlyphs=new WeakMap();
   // How a script glyph joins its neighbours: its entry and exit are its leftmost and rightmost points on the
   // lowercase band, where script letters meet. Dots and crossbars that touch neither are written after the letter's body.
-  function scriptGlyph(g,singleLine){
+  function scriptGlyph(g,singleLine,capital){
     if(scriptGlyphs.has(g))return scriptGlyphs.get(g);
     const subs=(g.d.match(/M[^M]*/g)||[]).map(d=>({d,pts:(d.match(/-?\d+(\.\d+)?,-?\d+(\.\d+)?/g)||[]).map(p=>p.split(',').map(Number))}));
     const all=subs.flatMap(s=>s.pts),band=all.filter(([,y])=>y>=11&&y<=19),pick=band.length?band:all;
     const entry=pick.reduce((a,p)=>p[0]<a[0]?p:a,pick[0]||[0,0]),exit=pick.reduce((a,p)=>p[0]>a[0]?p:a,pick[0]||[0,0]);
     const has=(s,p)=>s.pts.some(q=>q[0]===p[0]&&q[1]===p[1]),later=s=>{if(has(s,entry)||has(s,exit))return false;const xs=s.pts.map(p=>p[0]),ys=s.pts.map(p=>p[1]),w=Math.max(...xs)-Math.min(...xs),h=Math.max(...ys)-Math.min(...ys);return singleLine||(w<=2.5&&h<=2.5)||(h<=1.5&&w>=3);};
-    const info={offset:-entry[0],advance:Math.max(1,exit[0]-entry[0]),body:subs.filter(s=>!later(s)).map(s=>s.d),marks:subs.filter(later).map(s=>s.d)};
+    // Capitals often join from the middle. A capital whose entry is not at its left edge is placed like a normal letter,
+    // clear of its neighbours, instead of by its entry point.
+    const left=Math.min(...all.map(q=>q[0])),right=Math.max(...all.map(q=>q[0])),joins=!capital||entry[0]-left<=3;
+    const info={offset:joins?-entry[0]:-left,advance:joins?Math.max(1,exit[0]-entry[0],right-entry[0]-2):right-left+3,body:subs.filter(s=>!later(s)).map(s=>s.d),marks:subs.filter(later).map(s=>s.d)};
     scriptGlyphs.set(g,info);return info;
+  }
+  // The pen fonts store each stroke as straight segments on a coarse grid, which shows as corners on every curve. Draw
+  // them as smooth curves through the same points (Catmull-Rom), keeping a sharp corner wherever the stroke turns by
+  // more than about 60 degrees, as at the points of "M" or the corners of "E".
+  const smoothPens=new Map();
+  function smoothPenPath(d){
+    if(smoothPens.has(d))return smoothPens.get(d);
+    const f=q=>`${+q[0].toFixed(2)} ${+q[1].toFixed(2)}`;let out='';
+    for(const sub of d.match(/M[^M]*/g)||[]){
+      const p=(sub.match(/-?\d+(\.\d+)?,-?\d+(\.\d+)?/g)||[]).map(q=>q.split(',').map(Number)).filter((q,i,a)=>!i||q[0]!==a[i-1][0]||q[1]!==a[i-1][1]);
+      if(p.length<3){out+=`M${p.map(f).join('L')}`;if(p.length===1)out+=`L${f(p[0])}`;continue;}
+      const n=p.length,closed=n>3&&p[0][0]===p[n-1][0]&&p[0][1]===p[n-1][1];
+      const neighbour=(i,step)=>{const j=i+step;return j<0?(closed?p[n-2]:null):j>=n?(closed?p[1]:null):p[j];};
+      const turns=p.map((b,i)=>{const a=neighbour(i,-1),c=neighbour(i,1);if(!a||!c)return Math.PI;const u=[b[0]-a[0],b[1]-a[1]],v=[c[0]-b[0],c[1]-b[1]];return Math.acos(clamp((u[0]*v[0]+u[1]*v[1])/((Math.hypot(...u)*Math.hypot(...v))||1),-1,1));}),sharp=i=>turns[i]>1.05;
+      // Ease curve points a little toward their neighbours to even out the grid's lumps; corners and ends stay put.
+      const eased=p.map((b,i)=>{if(sharp(i))return b;const a=neighbour(i,-1),c=neighbour(i,1);return [(a[0]+b[0]*2+c[0])/4,(a[1]+b[1]*2+c[1])/4];});
+      if(closed)eased[n-1]=eased[0];p.splice(0,n,...eased);
+      out+=`M${f(p[0])}`;
+      for(let i=0;i<n-1;i++){
+        const a=p[i],b=p[i+1],before=sharp(i)?a:neighbour(i,-1),after=sharp(i+1)?b:neighbour(i+1,1);
+        out+=`C${f([a[0]+(b[0]-before[0])/6,a[1]+(b[1]-before[1])/6])} ${f([b[0]-(after[0]-a[0])/6,b[1]-(after[1]-a[1])/6])} ${f(b)}`;
+      }
+    }
+    smoothPens.set(d,out);return out;
   }
   function textPaths(it){
     const font=state.fonts?.[it.font]||state.fonts?.futural;if(!font)return [];
     const glyph=c=>font.chars[(c.charCodeAt(0)>=33&&c.charCodeAt(0)<=127?c.charCodeAt(0):63)-33];
-    const script=it.font in SCRIPT_STROKE_FONTS,join=c=>script&&glyph(c)?.d?scriptGlyph(glyph(c),SCRIPT_STROKE_FONTS[it.font]):null;
+    const script=it.font in SCRIPT_STROKE_FONTS,join=c=>script&&glyph(c)?.d?scriptGlyph(glyph(c),SCRIPT_STROKE_FONTS[it.font],/[A-Z]/.test(c)):null;
     const rows=String(it.text||'Text').split('\n').slice(0,6),advance=c=>/\s/u.test(c)?12:join(c)?.advance??(glyph(c)?.o||10)*1.68;
     const scale=it.fontSize/23,widths=rows.map(row=>[...row].reduce((a,c)=>a+advance(c),0)),fit=Math.min(1,it.w/(Math.max(1,...widths)*scale)),room=it.w/(scale*fit);
     const paths=[];
     rows.forEach((row,j)=>{let left=(room-widths[j])*(ALIGN_SHIFT[it.align]||0);const ty=it.y+j*it.fontSize*1.18;
       for(const raw of row){
         const g=glyph(raw),info=join(raw);
-        if(!/\s/u.test(raw)&&g?.d){const place=d=>({d,tx:it.x+(left+(info?.offset||0))*scale*fit,ty,sx:scale*fit,sy:scale,stroke:it.color,sw:1.35});
+        if(!/\s/u.test(raw)&&g?.d){const place=d=>({d:smoothPenPath(d),tx:it.x+(left+(info?.offset||0))*scale*fit,ty,sx:scale*fit,sy:scale,stroke:it.color,sw:1.35});
           paths.push(...(info?[...info.body,...info.marks]:[g.d]).map(place));}
         left+=advance(raw);
       }});
@@ -345,6 +383,7 @@
       if(state.playing&&lane&&(x<lane.scrollLeft+20||x>lane.scrollLeft+lane.clientWidth-40))lane.scrollLeft=Math.max(0,x-lane.clientWidth*.3);}
     $('#playBtn').textContent=state.playing?'Ⅱ':'▶';$('#previewBtn').innerHTML=state.playing?'Ⅱ <span>Pause</span>':'▶ <span>Preview</span>';
     $('#stopBtn').disabled=$('#topStopBtn').disabled=!state.preview&&state.time===0;
+    renderEditTools();
     const head=$('#playhead');if(!head)return;
     const loc=positionAt(state.time),show=(state.preview||state.time>0)&&loc.index===state.sceneIndex;head.hidden=!show;
     if(show){const x=timelineX(loc.local),strip=$('#itemStrip');head.style.left=`${x}px`;
@@ -443,9 +482,10 @@
     for(const clip of audioClips())if(clip.length==null&&audioFile(clip)?.duration)clip.length=Math.max(AUDIO_MIN,audioFile(clip).duration-num(clip.offset));
     renderTimeline();if(state.tool==='audio'||state.selectedClip)renderInspector();
   }
-  // Starts every clip that sounds at or after video time `at`, returning the audio-clock time that matches `at`.
-  function startClips(at,destination){
-    stopClips();const ctx=audioContext(),now=ctx.currentTime+.05;
+  // Schedules every clip that sounds at or after video time `at` on an audio context, starting `lead` seconds from now.
+  // Returns the context time that matches `at` and the started sources.
+  function scheduleClips(ctx,at,destination,lead){
+    const now=ctx.currentTime+lead,voices=[];
     for(const clip of audioClips()){
       const file=audioFile(clip),buffer=file&&audio.ready.get(file.src),length=clipLength(clip);if(!buffer||length<=0||clip.start+length<=at)continue;
       const into=Math.max(0,at-clip.start),when=now+Math.max(0,clip.start-at),source=ctx.createBufferSource(),gain=ctx.createGain();source.buffer=buffer;
@@ -453,10 +493,12 @@
       gain.gain.setValueAtTime(level(into),when);
       if(fadeIn>into)gain.gain.linearRampToValueAtTime(v,when+fadeIn-into);
       if(fadeOut){if(length-fadeOut>into)gain.gain.setValueAtTime(v,when+length-fadeOut-into);gain.gain.linearRampToValueAtTime(0,when+length-into);}
-      source.connect(gain).connect(destination||ctx.destination);source.start(when,num(clip.offset)+into,length-into);audio.voices.push(source);
+      source.connect(gain).connect(destination);source.start(when,num(clip.offset)+into,length-into);voices.push(source);
     }
-    return now;
+    return {now,voices};
   }
+  // Starts the clips for live playback, returning the audio-clock time that matches `at`.
+  function startClips(at,destination){stopClips();const ctx=audioContext(),r=scheduleClips(ctx,at,destination||ctx.destination,.05);audio.voices=r.voices;return r.now;}
   function stopClips(){for(const v of audio.voices){try{v.stop();}catch{}}audio.voices=[];}
   const hasAudio=()=>audioClips().some(c=>{const f=audioFile(c);return f&&audio.ready.has(f.src)&&clipLength(c)>0;});
   // Editor scale in pixels per second: fits the whole video by default, or the chosen zoom.
@@ -471,7 +513,7 @@
     return d;
   }
   function renderAudioEditor(){
-    const host=$('#audioEditor');if(!host)return;
+    const host=$('#audioEditor');if(!host)return;host.classList.toggle('razor',!!state.razor);
     const scroll=$('#audioScroll')?.scrollLeft||0,px=audioScale(),video=totalLen(),span=Math.max(video,...audioClips().map(c=>c.start+clipLength(c)),1),width=span*px+40;
     const every=[.5,1,2,5,10,15,30,60,120,300].find(s=>s*px>=46)||600;let ruler='';
     for(let t=0;t<=span+1e-6;t+=every)ruler+=`<span class="tick" style="left:${t*px}px">${every<1?`${t.toFixed(1)}s`:fmt(t)}</span>`;
@@ -488,7 +530,7 @@
     $('#audioScroll').scrollLeft=scroll;
   }
   function audioPanel(){
-    return `<div class="panel-eyebrow">SOUND</div><h2 class="panel-title">Audio</h2><p class="panel-help">Place music and narration clips anywhere on the video. Drag them in the audio lanes below the drawings.</p><div class="panel-actions"><button class="button primary" data-audio-add="0">Add music</button><button class="panel-action" data-audio-add="1">Add narration</button><button class="panel-action" data-audio-record>${state.recording?'■ Stop recording':'● Record at playhead'}</button></div><div class="panel-divider"></div>
+    return `<div class="panel-eyebrow">SOUND</div><h2 class="panel-title">Audio</h2><p class="panel-help">Place music and narration clips anywhere on the video. Drag them in the audio lanes below the drawings.</p><div class="panel-actions"><button class="button primary" data-audio-add="0">Add music</button><button class="panel-action" data-audio-add="1">Add narration</button><button class="panel-action" data-audio-record>${state.recording?'■ Stop recording':'● Record at playhead'}</button><button class="panel-action" data-action="narrate-all">Narrate all scene scripts</button></div><div class="panel-divider"></div>
       ${audioClips().length?audioClips().map(c=>`<button class="audio-list-item" data-select-clip="${esc(c.id)}"><span>${AUDIO_LANES[c.lane||0]}</span><strong>${esc(audioFile(c)?.name||'Audio')}</strong><small>${fmt(c.start)} – ${fmt(c.start+clipLength(c))}</small></button>`).join(''):'<div class="note-card">Tip: Record at playhead plays the video while you speak, so your narration lines up with the drawing.</div>'}`;
   }
   function clipPanel(clip){
@@ -505,17 +547,17 @@
     const clip=clipById(state.selectedClip);if(!clip)return;const file=audioFile(clip),n=num(value,0);
     if(key==='volume'){clip.volume=clamp(n,0,2);const label=$('#clipVolumeLabel');if(label)label.textContent=`${Math.round(clip.volume*100)}%`;}
     else if(key==='fadeIn'||key==='fadeOut')clip[key]=clamp(n,0,30);
-    else if(key==='start')clip.start=Math.max(0,n);
+    else if(key==='start'){clip.start=Math.max(0,n);linkOffset(clip);}
     else if(key==='length')clip.length=clamp(n,AUDIO_MIN,file?.duration?file.duration-num(clip.offset):3600);
     else if(key==='lane')clip.lane=clamp(Math.round(n),0,AUDIO_LANES.length-1);
     changed(false);
   }
   function clipAction(name){
-    const clips=audioClips(),clip=clipById(state.selectedClip);if(!clip)return;snapshot();
+    const clips=audioClips(),clip=clipById(state.selectedClip);if(!clip)return;
+    if(name==='split'){editClips('split',clipsAt(state.time).includes(clip)?[clip]:[],state.time);return;}
+    snapshot();
     if(name==='delete'){clips.splice(clips.indexOf(clip),1);state.selectedClip=null;}
-    if(name==='duplicate'){const copy={...clip,id:id(),start:clip.start+clipLength(clip)};clips.push(copy);state.selectedClip=copy.id;}
-    if(name==='split'){const at=state.time-clip.start,len=clipLength(clip);if(at<=AUDIO_MIN||at>=len-AUDIO_MIN){toast('Move the playhead inside the clip to split it.');return;}
-      const rest={...clip,id:id(),start:state.time,offset:num(clip.offset)+at,length:len-at,fadeIn:0};clip.length=at;clip.fadeOut=0;clips.push(rest);state.selectedClip=rest.id;}
+    if(name==='duplicate'){const copy={...clip,id:id(),start:clip.start+clipLength(clip)};clips.push(copy);linkOffset(copy);state.selectedClip=copy.id;}
     changed();
   }
   async function uploadAudio(file,lane=0){
@@ -551,9 +593,15 @@
       if(pick)selectClip(pick.dataset.selectClip);
       if(act)clipAction(act.dataset.clipAction);};
     host.addEventListener('click',panelClick);$('#inspector').addEventListener('click',panelClick);
-    $('#inspector').addEventListener('input',e=>{if(e.target.matches('[data-clip-set]'))applyClipField(e.target.dataset.clipSet,e.target.value);});
-    $('#inspector').addEventListener('change',e=>{if(e.target.matches('[data-clip-set]')){applyClipField(e.target.dataset.clipSet,e.target.value);renderInspector();}});
-    $('#inspector').addEventListener('focusin',e=>{if(e.target.matches('[data-clip-set]'))snapshot();});
+    $('#inspector').addEventListener('input',e=>{
+      if(e.target.matches('[data-scene-script]')){scene().script=e.target.value;changed(false);return;}
+      if(e.target.matches('[data-voice-speed]')){state.project.voiceSpeed=+e.target.value;$('#voiceSpeedLabel').textContent=`${Math.round(e.target.value*100)}%`;changed(false);return;}
+      if(e.target.matches('[data-clip-set]'))applyClipField(e.target.dataset.clipSet,e.target.value);});
+    $('#inspector').addEventListener('change',e=>{
+      if(e.target.matches('[data-voice]')){state.project.voice=e.target.value;changed(false);return;}
+      if(e.target.matches('[data-scene-fit]')){scene().fitToNarration=e.target.checked;changed(false);return;}
+      if(e.target.matches('[data-clip-set]')){applyClipField(e.target.dataset.clipSet,e.target.value);renderInspector();}});
+    $('#inspector').addEventListener('focusin',e=>{if(e.target.matches('[data-clip-set],[data-scene-script]'))snapshot();});
     // Dragging a clip moves it (and between lanes); dragging an edge trims it. Moves snap to the playhead, scene
     // starts and other clips' edges when close.
     host.addEventListener('pointerdown',e=>{
@@ -564,17 +612,19 @@
         const move=ev=>{if(ev.pointerId===e.pointerId)at(ev);},up=ev=>{if(ev.pointerId!==e.pointerId)return;window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up);};
         window.addEventListener('pointermove',move);window.addEventListener('pointerup',up);return;}
       if(!el)return;e.preventDefault();
-      const clip=clipById(el.dataset.clip);if(!clip)return;if(state.selectedClip!==clip.id)selectClip(clip.id);
+      const clip=clipById(el.dataset.clip);if(!clip)return;
+      if(state.razor){const t=timeAt(e);editClips('split',t>clip.start+AUDIO_MIN&&t<clip.start+clipLength(clip)-AUDIO_MIN?[clip]:[],t);return;}
+      if(state.selectedClip!==clip.id)selectClip(clip.id);
       const edge=e.target.closest('[data-clip-edge]')?.dataset.clipEdge,px=audioScale(),startX=e.clientX,original={...clip,length:clipLength(clip)},full=audioFile(clip)?.duration||Infinity;let took=false;
       const snapTargets=[state.time,...state.project.scenes.map((_,i)=>sceneStart(i)),...audioClips().filter(c=>c!==clip).flatMap(c=>[c.start,c.start+clipLength(c)])];
-      const snap=t=>{for(const s of snapTargets)if(Math.abs(s-t)*px<8)return s;return Math.round(t*20)/20;};
+      const snap=t=>{if(audio.snap!==false)for(const s of snapTargets)if(Math.abs(s-t)*px<8)return s;return Math.round(t*20)/20;};
       const move=ev=>{if(ev.pointerId!==e.pointerId)return;const d=(ev.clientX-startX)/px;if(!took&&Math.abs(ev.clientX-startX)<3)return;if(!took){snapshot();took=true;}
         if(edge==='left'){const shift=clamp(snap(original.start+d)-original.start,-Math.min(original.start,num(original.offset)),original.length-AUDIO_MIN);clip.start=original.start+shift;clip.offset=num(original.offset)+shift;clip.length=original.length-shift;}
         else if(edge==='right')clip.length=clamp(snap(original.start+original.length+d)-original.start,AUDIO_MIN,full-num(original.offset));
         else{const start=Math.max(0,original.start+d),end=start+original.length,at=Math.abs(snap(start)-start)<=Math.abs(snap(end)-end)?snap(start):snap(end)-original.length;clip.start=Math.max(0,at);
           const over=document.elementFromPoint(ev.clientX,ev.clientY)?.closest?.('[data-lane]');if(over)clip.lane=+over.dataset.lane;}
         renderAudioEditor();renderTimelineClock();};
-      const up=ev=>{if(ev.pointerId!==e.pointerId)return;window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up);window.removeEventListener('pointercancel',up);if(took){changed(false);renderInspector();}};
+      const up=ev=>{if(ev.pointerId!==e.pointerId)return;window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up);window.removeEventListener('pointercancel',up);if(took){linkOffset(clip);changed(false);renderInspector();}};
       window.addEventListener('pointermove',move);window.addEventListener('pointerup',up);window.addEventListener('pointercancel',up);
     });
     // The timeline panel can be dragged taller or shorter from its top edge.
@@ -584,6 +634,171 @@
       const move=ev=>{area.style.height=`${clamp(h0-(ev.clientY-startY),220,Math.max(260,innerHeight*.7))}px`;if(audio.zoom==null)renderAudioEditor();},up=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up);document.body.classList.remove('resizing-panel');try{localStorage.setItem('whiteboard-timeline-height',String(Math.round(area.getBoundingClientRect().height)));}catch{}};
       window.addEventListener('pointermove',move);window.addEventListener('pointerup',up);});
     let lastWidth=0;new ResizeObserver(()=>{const w=host.clientWidth;if(w!==lastWidth){lastWidth=w;if(audio.zoom==null)renderAudioEditor();renderTimelineClock();}}).observe(host);
+  }
+  // Narration from scene scripts, spoken by Kokoro in tts-worker.js. Each scene's narration is a clip on the Narration
+  // lane linked to its scene (clip.scene), so it moves with the scene when earlier scenes change length or scenes are
+  // reordered. Moving or trimming the clip by hand unlinks it.
+  const VOICES=[['af_heart','Heart · US female'],['af_bella','Bella · US female'],['af_nicole','Nicole · US female (soft)'],['af_sarah','Sarah · US female'],['af_nova','Nova · US female'],['af_sky','Sky · US female'],['af_alloy','Alloy · US female'],['af_aoede','Aoede · US female'],['af_jessica','Jessica · US female'],['af_kore','Kore · US female'],['af_river','River · US female'],
+    ['am_michael','Michael · US male'],['am_fenrir','Fenrir · US male'],['am_puck','Puck · US male'],['am_adam','Adam · US male'],['am_echo','Echo · US male'],['am_eric','Eric · US male'],['am_liam','Liam · US male'],['am_onyx','Onyx · US male'],['am_santa','Santa · US male'],
+    ['bf_emma','Emma · UK female'],['bf_isabella','Isabella · UK female'],['bf_alice','Alice · UK female'],['bf_lily','Lily · UK female'],['bm_george','George · UK male'],['bm_fable','Fable · UK male'],['bm_lewis','Lewis · UK male'],['bm_daniel','Daniel · UK male']];
+  const tts={worker:null,jobs:new Map(),next:1,status:'',busy:new Set(),cache:new Map(),playing:null};
+  function speak(text,voice,speed){
+    const key=`${voice}|${speed}|${text}`;if(tts.cache.has(key))return tts.cache.get(key);
+    const spoken=speakNow(text,voice,speed).catch(e=>{tts.cache.delete(key);throw e;});tts.cache.set(key,spoken);if(tts.cache.size>12)tts.cache.delete(tts.cache.keys().next().value);return spoken;
+  }
+  function speakNow(text,voice,speed){
+    if(!tts.worker){
+      tts.worker=new Worker('./tts-worker.js',{type:'module'});
+      tts.worker.onmessage=({data})=>{
+        if(data.type==='progress'){
+          tts.status=data.status==='progress'&&data.total>1e6?`Downloading the voice model… ${Math.round(data.loaded/data.total*100)}%`:data.status==='speaking'?`Speaking sentence ${data.done} of ${data.of}…`:data.status==='ready'?'Voice model ready. Speaking…':tts.status||'Loading the voice model…';
+          const line=$('#narrationStatus');if(line)line.textContent=tts.status;return;}
+        const job=tts.jobs.get(data.id);if(!job)return;tts.jobs.delete(data.id);
+        if(data.type==='done')job.resolve(data);else job.reject(new Error(data.message));};
+      tts.worker.onerror=e=>{for(const job of tts.jobs.values())job.reject(new Error(e.message||'The voice could not start'));tts.jobs.clear();tts.worker=null;};
+    }
+    const jobId=tts.next++;return new Promise((resolve,reject)=>{tts.jobs.set(jobId,{resolve,reject});tts.worker.postMessage({id:jobId,text,voice,speed});});
+  }
+  const voiceSettings=()=>({voice:state.project.voice||'af_heart',speed:clamp(num(state.project.voiceSpeed,1),.6,1.5)});
+  function stopPreviewVoice(){try{tts.playing?.source.stop();}catch{}tts.playing=null;}
+  // Plays spoken audio without adding it to the project. what is 'script' or 'voice', for the button that shows Stop.
+  async function previewVoice(text,what){
+    if(tts.playing?.what===what){stopPreviewVoice();renderInspector();return;}
+    stopPreviewVoice();const {voice,speed}=voiceSettings();tts.busy.add(what);tts.status=tts.worker?'Speaking…':'Loading the voice model…';renderInspector();
+    try{
+      const {samples,rate}=await speak(text,voice,speed),ctx=audioContext();await ctx.resume();
+      const buffer=ctx.createBuffer(1,samples.length,rate);buffer.copyToChannel(samples,0);const source=ctx.createBufferSource();source.buffer=buffer;source.connect(ctx.destination);
+      source.onended=()=>{if(tts.playing?.source===source){tts.playing=null;renderInspector();}};source.start();tts.playing={source,what};
+      tts.status=`Playing ${(samples.length/rate).toFixed(1)} s preview${what==='script'?'. Add it to the timeline when it sounds right.':'.'}`;
+    }catch(e){console.error(e);tts.status='The voice could not be played. Check your connection for the first download and try again.';}
+    finally{tts.busy.delete(what);renderInspector();}
+  }
+  // 16-bit mono WAV, stored with the project like any other audio file.
+  function wavDataUrl(samples,rate){
+    const bytes=new Uint8Array(44+samples.length*2),v=new DataView(bytes.buffer),text=(o,s)=>{for(let i=0;i<s.length;i++)bytes[o+i]=s.charCodeAt(i);};
+    text(0,'RIFF');v.setUint32(4,36+samples.length*2,true);text(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,rate,true);v.setUint32(28,rate*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);text(36,'data');v.setUint32(40,samples.length*2,true);
+    for(let i=0;i<samples.length;i++)v.setInt16(44+i*2,Math.round(clamp(samples[i],-1,1)*32767),true);
+    let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));
+    return 'data:audio/wav;base64,'+btoa(binary);
+  }
+  function fitSceneTo(s,target){
+    const len=sceneLen(s);if(len<=0)return;const k=target/len;
+    for(const it of s.items){it.duration=Math.max(.1,Math.round(num(it.duration,1)*k*100)/100);it.pause=Math.max(0,Math.round(num(it.pause)*k*100)/100);}
+  }
+  function syncNarration(){
+    for(const clip of audioClips()){if(!clip.scene)continue;const index=state.project.scenes.findIndex(s=>s.id===clip.scene);if(index<0)delete clip.scene;else clip.start=Math.max(0,sceneStart(index)+num(clip.sceneOffset));}
+  }
+  async function narrateScene(s){
+    const text=String(s.script||'').trim();if(!text){toast('Write a script for this scene first.');return false;}
+    if(tts.busy.has(s.id))return false;tts.busy.add(s.id);tts.status='Loading the voice model…';if(scene()===s)renderInspector();
+    try{
+      const {voice,speed}=voiceSettings(),{samples,rate}=await speak(text,voice,speed),seconds=samples.length/rate;
+      const src=wavDataUrl(samples,rate),buffer=await loadAudioFile({src});
+      snapshot();
+      // Replace this scene's earlier narration, and drop its audio file if nothing else uses it.
+      const clips=audioClips();for(const old of clips.filter(c=>c.scene===s.id)){clips.splice(clips.indexOf(old),1);if(!clips.some(c=>c.file===old.file))delete state.project.audioFiles[old.file];}
+      if(s.fitToNarration!==false)fitSceneTo(s,seconds+.5);
+      const fileId=id(),name=`${s.name} narration`;(state.project.audioFiles||(state.project.audioFiles={}))[fileId]={name,src,duration:buffer.duration};
+      clips.push({id:id(),file:fileId,lane:1,start:0,offset:0,length:buffer.duration,volume:1,fadeIn:0,fadeOut:0,scene:s.id});
+      tts.status=`Narration ready: ${seconds.toFixed(1)} s${s.fitToNarration!==false?', scene timing matched':''}.`;changed();return true;
+    }catch(e){console.error(e);tts.status='The narration could not be made. Check your connection for the first download and try again.';toast('Could not make the narration.');return false;}
+    finally{tts.busy.delete(s.id);if(state.tool!=='audio'&&!item()&&!state.selectedClip)renderInspector();}
+  }
+  async function narrateAll(){
+    const scenes=state.project.scenes.filter(s=>String(s.script||'').trim());if(!scenes.length){toast('Add a script to a scene first.');return;}
+    let made=0;for(const s of scenes)if(await narrateScene(s))made++;toast(`Narrated ${made} of ${scenes.length} scene${scenes.length===1?'':'s'}.`);
+  }
+  function scriptFields(s){
+    const busy=tts.busy.has(s.id),fit=s.fitToNarration!==false;
+    return `<div class="panel-divider"></div><div class="field"><label>Script</label><textarea data-scene-script rows="5" placeholder="What the narrator says in this scene…">${esc(s.script||'')}</textarea></div>
+      <div class="field"><label>Voice</label><select data-voice>${VOICES.map(([v,n])=>`<option value="${v}" ${(state.project.voice||'af_heart')===v?'selected':''}>${n}</option>`).join('')}</select></div>
+      <div class="field"><label>Speaking speed <span id="voiceSpeedLabel">${Math.round(clamp(num(state.project.voiceSpeed,1),.6,1.5)*100)}%</span></label><input data-voice-speed type="range" min="0.6" max="1.5" step="0.05" value="${clamp(num(state.project.voiceSpeed,1),.6,1.5)}"></div>
+      <label class="check-row"><input type="checkbox" data-scene-fit ${fit?'checked':''}> Fit this scene's timing to the narration</label>
+      <div class="narrate-row"><button class="panel-action" data-action="preview-script" ${tts.busy.has('script')?'disabled':''}>${tts.playing?.what==='script'?'■ Stop':tts.busy.has('script')?'Speaking…':'▶ Preview'}</button><button class="panel-action" data-action="preview-voice" ${tts.busy.has('voice')?'disabled':''}>${tts.playing?.what==='voice'?'■ Stop':tts.busy.has('voice')?'Speaking…':'Try voice'}</button></div>
+      <button class="button primary narrate-button" data-action="narrate" ${busy?'disabled':''}>${busy?'Adding narration…':audioClips().some(c=>c.scene===s.id)?'Replace narration on timeline':'Add narration to timeline'}</button>
+      <p id="narrationStatus" class="panel-help">${esc(tts.status)}</p>
+      <div class="note-card">Narration is spoken by Kokoro on this computer. The first time, the voice model (about 92 MB) downloads once.</div>`;
+  }
+  // A sample of a single-line pen font, drawn from its glyphs.
+  function strokeSample(key){
+    const paths=textPaths({text:'Hello there',font:key,fontSize:23,x:0,y:2,w:2000,h:40,color:'currentColor'});if(!paths.length)return '';
+    const right=Math.max(...paths.map(p=>p.tx))+20;
+    return `<svg viewBox="0 0 ${right} 36" preserveAspectRatio="xMinYMid meet">${paths.map(p=>`<path d="${esc(p.d)}" transform="translate(${p.tx} ${p.ty}) scale(${p.sx} ${p.sy})" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')}</svg>`;
+  }
+  function fontPicker(it){
+    const current=it.font||'futural';
+    return `<div class="field"><label>Writing style</label><div class="font-picker">${FONT_GROUPS.map(([group,list])=>`<div class="font-group">${group}</div>${list.map(([key,name,looks])=>`<button class="font-tile ${current===key?'active':''}" data-font="${key}" title="${esc(name)} · ${esc(looks)}"><span class="font-face"${HANDWRITING_FONTS[key]?` style="font-family:'${esc(HANDWRITING_FONTS[key])}',cursive"`:''}>${HANDWRITING_FONTS[key]?'Hello there':strokeSample(key)}</span><span class="font-name">${esc(name)}<small>${esc(looks)}</small></span></button>`).join('')}`).join('')}</div></div>`;
+  }
+  // Timeline editing tools. Split and trims work on audio at the playhead: the selected clip if it is under the
+  // playhead, otherwise every clip under it, as in most video editors. Scenes can be split at the playhead too.
+  function undo(){if(!state.undo.length)return;state.redo.push(clone(state.project));state.project=state.undo.pop();state.sceneIndex=clamp(state.sceneIndex,0,state.project.scenes.length-1);state.selected=null;state.selectedClip=null;changed();}
+  function redo(){if(!state.redo.length)return;state.undo.push(clone(state.project));state.project=state.redo.pop();state.sceneIndex=clamp(state.sceneIndex,0,state.project.scenes.length-1);state.selected=null;state.selectedClip=null;changed();}
+  // A narration clip linked to its scene keeps its distance from the scene's start, so it follows the scene.
+  function linkOffset(clip){
+    if(!clip.scene)return;const index=state.project.scenes.findIndex(s=>s.id===clip.scene);
+    if(index<0){delete clip.scene;delete clip.sceneOffset;return;}clip.sceneOffset=clip.start-sceneStart(index);
+  }
+  const clipsAt=t=>audioClips().filter(c=>t>c.start+AUDIO_MIN&&t<c.start+clipLength(c)-AUDIO_MIN);
+  function editTargets(t){const chosen=clipById(state.selectedClip);return chosen?(clipsAt(t).includes(chosen)?[chosen]:[]):clipsAt(t);}
+  function splitClipAt(clip,t){
+    const at=t-clip.start,len=clipLength(clip),rest={...clip,id:id(),start:t,offset:num(clip.offset)+at,length:len-at,fadeIn:0};
+    clip.length=at;clip.fadeOut=0;audioClips().push(rest);linkOffset(rest);return rest;
+  }
+  function trimClipStart(clip,t){const d=t-clip.start,len=clipLength(clip);clip.start=t;clip.offset=num(clip.offset)+d;clip.length=len-d;clip.fadeIn=Math.min(num(clip.fadeIn),clip.length/2);linkOffset(clip);}
+  function trimClipEnd(clip,t){clip.length=t-clip.start;clip.fadeOut=Math.min(num(clip.fadeOut),clip.length/2);}
+  // Applies split or a trim to the given clips at video time t.
+  function editClips(name,clips,t){
+    if(!clips.length){toast(state.selectedClip?'Move the playhead inside the selected clip.':'Move the playhead over an audio clip.');return;}
+    snapshot();let last=null;
+    for(const c of clips){if(name==='split')last=splitClipAt(c,t);else if(name==='trim-start')trimClipStart(c,t);else trimClipEnd(c,t);}
+    if(name==='split'&&clips.length===1){state.selectedClip=last.id;state.selected=null;}
+    changed();
+  }
+  // Moves the drawings that start at or after the playhead into a new scene right after this one.
+  function splitSceneAt(t){
+    const index=state.sceneIndex,s=scene(),local=t-sceneStart(index);let clock=0,at=-1;
+    if(local<0||local>sceneLen(s)+1e-6){toast('Move the playhead into this scene to split it.');return;}
+    for(let i=0;i<s.items.length;i++){if(clock>=local-1e-6){at=i;break;}clock+=itemLen(s.items[i]);}
+    if(at<=0){toast('Move the playhead between two drawings in this scene to split it.');return;}
+    snapshot();const rest={id:id(),name:`${s.name} (continued)`,background:s.background,items:s.items.splice(at)};state.project.scenes.splice(index+1,0,rest);
+    for(const c of audioClips())if(c.scene===s.id&&num(c.sceneOffset)>=clock-1e-6){c.scene=rest.id;c.sceneOffset=num(c.sceneOffset)-clock;}
+    state.selected=null;changed();toast(`Split into “${s.name}” and “${rest.name}”.`);
+  }
+  function editAction(name,t=state.time){
+    if(name==='undo')return undo();if(name==='redo')return redo();
+    if(name==='razor'){state.razor=!state.razor;renderAudioEditor();renderEditTools(true);return;}
+    if(name==='snap'){audio.snap=audio.snap===false;renderEditTools(true);return;}
+    if(name==='split-scene')return splitSceneAt(t);
+    if(name==='delete'||name==='duplicate'){if(state.selectedClip)clipAction(name);else if(state.selected)action(name);else toast('Select a drawing or an audio clip first.');return;}
+    editClips(name,editTargets(t),t);
+  }
+  let editToolsKey='';
+  function renderEditTools(force){
+    const host=$('#editTools');if(!host)return;
+    const targets=editTargets(state.time).length,chosen=!!(clipById(state.selectedClip)||item()),key=[targets>0,chosen,state.undo.length>0,state.redo.length>0,!!state.razor,audio.snap!==false].join();
+    if(key===editToolsKey&&!force)return;editToolsKey=key;
+    const b=(name,label,title,enabled=true,active=false)=>`<button class="tool-chip ${active?'active':''}" data-edit="${name}" title="${title}" ${enabled?'':'disabled'}>${label}</button>`;
+    host.innerHTML=b('undo','↶','Undo (Ctrl+Z)',state.undo.length>0)+b('redo','↷','Redo (Ctrl+Y)',state.redo.length>0)+'<span class="tool-sep"></span>'+
+      b('split','✂ Split','Split audio at the playhead (S)',targets>0)+b('trim-start','⇤','Trim the start of audio to the playhead ([)',targets>0)+b('trim-end','⇥','Trim the end of audio to the playhead (])',targets>0)+'<span class="tool-sep"></span>'+
+      b('duplicate','⧉','Duplicate the selection (Ctrl+D)',chosen)+b('delete','🗑','Delete the selection (Delete)',chosen)+'<span class="tool-sep"></span>'+
+      b('razor','Razor','Razor: click an audio clip to cut it there (C)',true,!!state.razor)+b('snap','Snap','Snap clips to the playhead, scenes and other clips',true,audio.snap!==false)+b('split-scene','✂ Scene','Split this scene into two at the playhead');
+  }
+  // Right-click menu for an audio clip, acting at the point that was clicked.
+  function showClipMenu(clip,t,x,y){
+    closeClipMenu();const menu=document.createElement('div');menu.id='clipMenu';menu.className='clip-menu';
+    const inside=t>clip.start+AUDIO_MIN&&t<clip.start+clipLength(clip)-AUDIO_MIN;
+    menu.innerHTML=[['split','✂ Split here',inside],['trim-start','⇤ Trim start to here',inside],['trim-end','Trim end to here ⇥',inside],['duplicate','⧉ Duplicate',true],['delete','🗑 Delete',true]].map(([name,label,ok])=>`<button data-menu="${name}" ${ok?'':'disabled'}>${label}</button>`).join('');
+    menu.style.left=`${Math.min(x,innerWidth-190)}px`;menu.style.top=`${Math.min(y,innerHeight-190)}px`;document.body.appendChild(menu);
+    menu.addEventListener('click',e=>{const b=e.target.closest('[data-menu]');if(!b)return;closeClipMenu();const name=b.dataset.menu;state.selectedClip=clip.id;state.selected=null;
+      if(name==='duplicate'||name==='delete')clipAction(name);else editClips(name,[clip],t);});
+    setTimeout(()=>{window.addEventListener('pointerdown',closeOnOutside,true);},0);
+  }
+  function closeOnOutside(e){if(!e.target.closest('#clipMenu'))closeClipMenu();}
+  function closeClipMenu(){$('#clipMenu')?.remove();window.removeEventListener('pointerdown',closeOnOutside,true);}
+  function bindEditing(){
+    $('#editTools').addEventListener('click',e=>{const b=e.target.closest('[data-edit]');if(b)editAction(b.dataset.edit);});
+    $('#audioEditor').addEventListener('contextmenu',e=>{const el=e.target.closest('[data-clip]'),clip=el&&clipById(el.dataset.clip);if(!clip)return;e.preventDefault();
+      const t=Math.max(0,(e.clientX-$('#audioScroll .audio-inner').getBoundingClientRect().left)/audioScale());selectClip(clip.id);showClipMenu(clip,t,e.clientX,e.clientY);});
   }
   const field=(label,key,val,type='text',opts='')=>`<div class="field"><label>${label}</label><input data-set="${key}" type="${type}" value="${esc(val)}" ${opts}></div>`;
   const selectField=(label,key,val,options)=>`<div class="field"><label>${label}</label><select data-set="${key}">${options.map(([v,n])=>`<option value="${v}" ${val===v?'selected':''}>${n}</option>`).join('')}</select></div>`;
@@ -595,11 +810,12 @@
       if(it.type==='camera'){
         html+=`<div class="panel-divider"></div>${field('Zoom','zoom',it.zoom,'number','min="0.2" max="5" step="0.05"')}<div class="field-row">${field('Center X','cx',Math.round(it.cx),'number','step="10"')}${field('Center Y','cy',Math.round(it.cy),'number','step="10"')}</div><button class="panel-action camera-preview" data-action="preview-camera">Preview this camera frame</button><p class="panel-help camera-help">Drag the green frame to pan. Drag its handles to resize the shot. Preview is cropped to this frame.</p>`;
       }else{
-        if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}<div class="field"><label>Align</label><div class="segmented">${[['left','⇤ Left'],['center','↔ Center'],['right','Right ⇥']].map(([v,n])=>`<button data-align="${v}" class="${(it.align||'left')===v?'active':''}" title="Align text ${v}">${n}</button>`).join('')}</div></div>${selectField('Writing style','font',it.font||'futural',FONT_OPTIONS)}${HANDWRITING_FONTS[it.font]?`<div class="font-sample" style="font-family:'${esc(HANDWRITING_FONTS[it.font])}',sans-serif">The quick brown fox 123</div>`:''}`;
+        if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}<div class="field"><label>Align</label><div class="segmented">${[['left','⇤ Left'],['center','↔ Center'],['right','Right ⇥']].map(([v,n])=>`<button data-align="${v}" class="${(it.align||'left')===v?'active':''}" title="Align text ${v}">${n}</button>`).join('')}</div></div>${fontPicker(it)}`;
         if(it.type==='icon'||it.type==='text'||it.type==='vector')html+=field('Color','color',it.color||'#285d63','color');
         if(it.type==='shape')html+=`${selectField('Shape','shape',it.shape,[['round','Rounded rectangle'],['rect','Rectangle'],['circle','Ellipse']])}${field('Fill','fill',it.fill,'color')}`;
         html+=`<div class="field-row">${field('X position','x',Math.round(it.x),'number','step="1"')}${field('Y position','y',Math.round(it.y),'number','step="1"')}</div><div class="field-row">${field('Width','w',Math.round(it.w),'number','min="10"')}${field('Height','h',Math.round(it.h),'number','min="10"')}</div>`;
         html+=selectField('Entrance','animation',it.animation==='reveal'?'draw':it.animation,[['draw','Hand draw'],['fade','Fade in'],['slide','Slide in'],['pop','Pop in'],['none','Appear']]);
+        if(it.type==='image'&&it.character)html+=characterFaceField(it);
         if(it.type==='image')html+=`<div class="note-card">${it.illustration?'The marker draws the line work first, then colors in each area. Transparent areas stay clear.':'The marker traces visible contours and fills only visible artwork. Transparent areas stay clear.'}</div>`;
       }
       html+=`<div class="panel-divider"></div><div class="field-row">${field('Duration (sec)','duration',it.duration,'number','min="0.1" max="60" step="0.1"')}${field('Pause (sec)','pause',it.pause,'number','min="0" max="60" step="0.1"')}</div><div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-action="duplicate">Duplicate</button><button class="panel-action" data-action="back">Move earlier</button><button class="panel-action" data-action="forward">Move later</button><button class="panel-action danger" data-action="delete">Delete</button></div>`;
@@ -610,14 +826,15 @@
     }else if(state.tool==='audio'){
       html=audioPanel();
     }else{
-      html=`<div class="panel-eyebrow">SCENE SETTINGS</div><h2 class="panel-title">${esc(s.name)}</h2><p class="panel-help">Build your whiteboard story, one moment at a time.</p>${field('Scene name','sceneName',s.name)}${field('Background','background',s.background,'color')}<div class="panel-divider"></div><div class="field"><label>Camera and video format</label><div class="segmented">${[['16:9','Wide'],['1:1','Square'],['9:16','Tall']].map(([v,n])=>`<button data-ratio="${v}" class="${state.project.ratio===v?'active':''}">${n}</button>`).join('')}</div></div><div class="panel-divider"></div><div class="note-card">Pan across the whiteboard to build beyond the first frame. Add camera views to choose each shot.</div><div class="panel-divider"></div><button class="panel-action danger" data-action="scene-delete" ${state.project.scenes.length===1?'disabled':''}>Delete scene</button>`;
+      html=`<div class="panel-eyebrow">SCENE SETTINGS</div><h2 class="panel-title">${esc(s.name)}</h2><p class="panel-help">Build your whiteboard story, one moment at a time.</p>${field('Scene name','sceneName',s.name)}${field('Background','background',s.background,'color')}${scriptFields(s)}<div class="panel-divider"></div><div class="field"><label>Camera and video format</label><div class="segmented">${[['16:9','Wide'],['1:1','Square'],['9:16','Tall']].map(([v,n])=>`<button data-ratio="${v}" class="${state.project.ratio===v?'active':''}">${n}</button>`).join('')}</div></div><div class="panel-divider"></div><div class="note-card">Pan across the whiteboard to build beyond the first frame. Add camera views to choose each shot.</div><div class="panel-divider"></div><button class="panel-action danger" data-action="scene-delete" ${state.project.scenes.length===1?'disabled':''}>Delete scene</button>`;
     }
     $('#inspector').innerHTML=html;
+    const picker=$('.font-picker'),chosen=picker?.querySelector('.active');if(chosen)picker.scrollTop=chosen.offsetTop-picker.offsetTop-picker.clientHeight/2+chosen.clientHeight/2;
     if(state.tool==='icon'&&!it)showLibraryResults();
   }
   function renderAll(){renderStage();renderTimeline();renderInspector();$('#projectName').value=state.project.name;$('#formatLabel').textContent=({'16:9':'16:9 · Landscape','1:1':'1:1 · Square','9:16':'9:16 · Portrait'})[state.project.ratio];document.querySelectorAll('.tool').forEach(b=>b.classList.toggle('active',b.dataset.tool===state.tool));}
   function snapshot(){state.undo.push(clone(state.project));if(state.undo.length>40)state.undo.shift();state.redo=[];}
-  function changed(full=true){state.project.updated=Date.now();$('#saveStatus').textContent='Saving…';clearTimeout(state.saveTimer);state.saveTimer=setTimeout(saveProject,450);if(full)renderAll();else{renderStage();renderTimeline();}}
+  function changed(full=true){syncNarration();state.project.updated=Date.now();$('#saveStatus').textContent='Saving…';clearTimeout(state.saveTimer);state.saveTimer=setTimeout(saveProject,450);if(full)renderAll();else{renderStage();renderTimeline();}}
   function toast(message){const t=$('#toast');t.textContent=message;t.classList.remove('hidden');clearTimeout(toast.timer);toast.timer=setTimeout(()=>t.classList.add('hidden'),3000);}
   function addItem(it){if(it.type!=='camera'){const max=state.editorView.w*.82;if(it.w>max){const f=max/it.w;it.w*=f;it.h*=f;if(it.fontSize)it.fontSize=Math.round(it.fontSize*f);}it.x=state.editorView.cx-it.w/2;it.y=state.editorView.cy-it.h/2;}snapshot();scene().items.push(it);state.selected=it.id;state.tool='select';changed();}
   function baseItem(type){return {id:id(),type,x:560,y:310,w:450,h:280,animation:'draw',duration:1.6,pause:.3};}
@@ -753,9 +970,10 @@
   // Fluent Emoji Flat. Icons: the hand-drawn basics plus Tabler line icons. Both open-source sets are MIT licensed (no
   // credit needed in videos) and load the first time their tab is shown. Results show a page at a time.
   const LIBRARY_PAGE=96,ICON_STROKE=1.25,INK=[0x1f,0x2a,0x36];
-  const library={tab:'art',query:'',category:'all',limit:LIBRARY_PAGE,art:null,icons:null,loading:{}};
+  const SKIN_TONES=[['','Default','#ffc83d'],['light','Light','#f7d7c4'],['medium-light','Medium-light','#e5b593'],['medium','Medium','#c48f6a'],['medium-dark','Medium-dark','#8d5a3b'],['dark','Dark','#5b3a29']];
+  const library={tab:'art',query:'',category:'all',limit:LIBRARY_PAGE,tone:'',art:null,icons:null,loading:{},peep:{head:'short2',face:'smile',facialHair:'',accessories:'',skin:'edb98a',clothing:'8fa7df',hair:'2c1b18'}};
   function loadLibrarySet(kind){
-    library.loading[kind]??=fetch(kind==='art'?'./assets/illustrations/fluent-index.json':'./assets/icons/tabler-icons.json').then(r=>{if(!r.ok)throw new Error('Library did not load');return r.json();})
+    library.loading[kind]??=fetch(kind==='art'?'./assets/illustrations/index.json':'./assets/icons/tabler-icons.json').then(r=>{if(!r.ok)throw new Error('Library did not load');return r.json();})
       .then(data=>{library[kind]=data;}).catch(e=>{delete library.loading[kind];throw e;});
     return library.loading[kind];
   }
@@ -765,32 +983,38 @@
       return basics.concat((library.icons?.icons||[]).map(([name,cat,words],i)=>({kind:'tabler',i,name:name.replace(/-/g,' '),category:library.icons.categories[cat],words})));
     }
     const sheets=SHEETS.flatMap((sheet,si)=>sheet.items.map((name,ii)=>({kind:'sheet',si,ii,name,category:sheet.name,words:''})));
-    return sheets.concat((library.art?.items||[]).map(([slug,name,group,words])=>({kind:'emoji',slug,name,category:group,words})));
+    return sheets.concat((library.art?.items||[]).map(([path,name,group,words,toned])=>({kind:'art',path,name,category:group,words,toned})));
   }
   function libraryResults(){
     const words=library.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return libraryEntries().filter(e=>(library.category==='all'||e.category===library.category)&&words.every(w=>`${e.name} ${e.category} ${e.words}`.toLowerCase().includes(w)));
   }
+  // People with skin tones use the chosen tone's file.
+  const artFile=e=>e.toned&&library.tone?e.path.replace(/\.svg$/,`--${library.tone}.svg`):e.path;
   function libraryThumb(e){
     if(e.kind==='sheet'){const sheet=SHEETS[e.si],cols=sheet.cols||2,rows=sheet.rows||2;return sheet.file?`<span class="sheet-thumb" style="background-image:url('./assets/sheets/${sheet.file}');background-size:${cols*100}% ${rows*100}%;background-position:${(e.ii%cols)/(cols-1)*100}% ${Math.floor(e.ii/cols)/(rows-1)*100}%"></span>`:'<span class="sheet-thumb"></span>';}
-    if(e.kind==='emoji')return `<img src="./assets/illustrations/fluent/${esc(e.slug)}.svg" alt="" loading="lazy" decoding="async">`;
+    if(e.kind==='art')return `<img src="./assets/illustrations/${esc(artFile(e))}" alt="" loading="lazy" decoding="async">`;
     const basic=e.kind==='basic',paths=basic?ICONS[e.key].paths:library.icons.icons[e.i][3];
     return `<svg viewBox="${basic?'0 0 100 100':'0 0 24 24'}" fill="none" stroke="currentColor" stroke-width="${basic?5:1.7}" stroke-linecap="round" stroke-linejoin="round">${paths.map(d=>`<path d="${esc(d)}"/>`).join('')}</svg>`;
   }
   function libraryButton(e){
-    const data=e.kind==='sheet'?`data-sheet="${e.si}" data-sheet-item="${e.ii}"`:e.kind==='emoji'?`data-emoji="${esc(e.slug)}"`:e.kind==='basic'?`data-icon="${e.key}"`:`data-tabler="${e.i}"`;
-    return `<button class="lib-item" ${data} title="Add ${esc(e.name)}"><span class="lib-thumb">${libraryThumb(e)}</span><span class="lib-name">${esc(e.name)}</span></button>`;
+    const data=e.kind==='sheet'?`data-sheet="${e.si}" data-sheet-item="${e.ii}"`:e.kind==='art'?`data-art="${esc(artFile(e))}" data-art-name="${esc(e.name)}"`:e.kind==='basic'?`data-icon="${e.key}"`:`data-tabler="${e.i}"`;
+    return `<button class="lib-item ${e.category==='Backdrops'?'wide':''}" ${data} title="Add ${esc(e.name)}"><span class="lib-thumb">${libraryThumb(e)}</span><span class="lib-name">${esc(e.name)}</span></button>`;
   }
   function libraryPanel(){
-    const icons=library.tab==='icons',groups=icons?[['Icons',['Hand-drawn basics',...(library.icons?.categories||[]).slice().sort()]]]:[['Whiteboard drawings',SHEETS.map(s=>s.name)],['Color illustrations',library.art?.groups||[]]];
-    return `<div class="panel-eyebrow">LIBRARY</div><h2 class="panel-title">Drawings</h2><div class="segmented lib-tabs">${[['art','Illustrations'],['icons','Icons']].map(([v,n])=>`<button data-lib-tab="${v}" class="${library.tab===v?'active':''}">${n}</button>`).join('')}</div>
+    const tabs=`<div class="segmented lib-tabs">${[['art','Illustrations'],['characters','Characters'],['icons','Icons']].map(([v,n])=>`<button data-lib-tab="${v}" class="${library.tab===v?'active':''}">${n}</button>`).join('')}</div>`;
+    if(library.tab==='characters')return `<div class="panel-eyebrow">LIBRARY</div><h2 class="panel-title">Drawings</h2>${tabs}${characterBuilder()}`;
+    const icons=library.tab==='icons',groups=icons?[['Icons',['Hand-drawn basics',...(library.icons?.categories||[]).slice().sort()]]]:[['Illustrations',library.art?.groups||[]],['Whiteboard drawings',SHEETS.map(s=>s.name)]];
+    return `<div class="panel-eyebrow">LIBRARY</div><h2 class="panel-title">Drawings</h2>${tabs}
       <div class="field"><input id="librarySearch" type="search" placeholder="Search ${icons?'icons':'illustrations'}" value="${esc(library.query)}" aria-label="Search the library"></div>
       <div class="field"><select id="libraryCategory" aria-label="Category"><option value="all">All categories</option>${groups.map(([label,list])=>`<optgroup label="${label}">${list.map(c=>`<option value="${esc(c)}" ${library.category===c?'selected':''}>${esc(c)}</option>`).join('')}</optgroup>`).join('')}</select></div>
+      ${icons?'':`<div class="tone-row" title="Skin tone for people"><span>Skin tone</span>${SKIN_TONES.map(([v,n,c])=>`<button class="tone ${library.tone===v?'active':''}" data-lib-tone="${v}" title="${n}" style="background:${c}"></button>`).join('')}</div>`}
       <p id="libraryCount" class="lib-count"></p><div id="libraryGrid" class="lib-grid ${icons?'icons':''}"></div>
-      <div class="note-card">${icons?'Icons are drawn line by line with the marker in the color you choose.':'All artwork has a transparent background. Color illustrations get a marker outline and are traced, then colored in.'}</div>`;
+      <div class="note-card">${icons?'Icons are drawn line by line with the marker in the color you choose.':'Everything is drawn like an illustrator would: line work first, then colored in. All of it is free to use in your videos without credit.'}</div>`;
   }
   // Fills the results grid without rebuilding the panel, so typing in the search box keeps its focus.
   function showLibraryResults(){
+    if(library.tab==='characters'){showCharacterPreview();return;}
     const grid=$('#libraryGrid');if(!grid)return;
     const kind=library.tab==='icons'?'icons':'art';
     if(!library[kind]){grid.innerHTML='<p class="lib-count">Loading…</p>';loadLibrarySet(kind).then(()=>{if(state.tool==='icon'&&!item())renderInspector();}).catch(()=>{grid.innerHTML='<p class="lib-count">The library could not load. Check your connection and try again.</p>';});}
@@ -799,10 +1023,17 @@
     grid.innerHTML=shown.map(libraryButton).join('')+(results.length>shown.length?`<button class="panel-action lib-more" data-lib-more>Show ${Math.min(LIBRARY_PAGE,results.length-shown.length)} more</button>`:'');
     hydrateSheetThumbnails();
   }
+  function svgImage(svg){return new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=()=>no(new Error('Illustration did not load'));i.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);});}
+  // Draws an SVG to a transparent PNG about 480px on its long side, keeping its shape.
+  async function rasterizeSvg(svg){
+    const image=await svgImage(svg),k=480/Math.max(image.naturalWidth||480,image.naturalHeight||480),w=Math.round((image.naturalWidth||480)*k),h=Math.round((image.naturalHeight||480)*k),M=12;
+    const c=document.createElement('canvas');c.width=w+M*2;c.height=h+M*2;c.getContext('2d').drawImage(image,M,M,w,h);
+    return {src:c.toDataURL('image/png'),width:c.width,height:c.height};
+  }
   // Fluent illustrations are flat, without outlines. A dark marker outline around the shape and along strong color
   // edges makes them match the whiteboard art; the marker then traces and colors them like the other drawings.
   async function outlinedIllustration(svg){
-    const image=await new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=()=>no(new Error('Illustration did not load'));i.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);});
+    const image=await svgImage(svg);
     const S=480,M=16,W=S+M*2,color=document.createElement('canvas');color.width=color.height=W;
     const cg=color.getContext('2d',{willReadFrequently:true});cg.drawImage(image,M,M,S,S);
     const data=cg.getImageData(0,0,W,W),px=data.data,lines=new Uint8Array(W*W);
@@ -817,17 +1048,72 @@
     og.drawImage(color,0,0);
     return {src:out.toDataURL('image/png'),width:W,height:W};
   }
-  async function addEmojiDrawing(slug){
-    const name=library.art?.items.find(x=>x[0]===slug)?.[1]||'Illustration';
+  // Adds an illustration from the index. Fluent art gets the marker outline; doodles and backdrops are line art already.
+  async function addArtDrawing(file,name){
     try{
-      const response=await fetch(`./assets/illustrations/fluent/${slug}.svg`);if(!response.ok)throw new Error('Illustration did not load');
-      const art=await outlinedIllustration(await response.text()),trace=await traceImage(art.src);
-      addItem(await withIllustration({...baseItem('image'),label:name,src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,artRef:['fluent',slug],w:300,h:300,duration:2.2}));toast(`${name} added to the canvas.`);
+      const response=await fetch(`./assets/illustrations/${file}`);if(!response.ok)throw new Error('Illustration did not load');
+      const svg=await response.text(),art=file.startsWith('fluent/')?await outlinedIllustration(svg):await rasterizeSvg(svg),trace=await traceImage(art.src),backdrop=file.startsWith('backdrops/');
+      const w=backdrop?1200:file.startsWith('doodles/')?420:300,h=w*art.height/art.width;
+      addItem(await withIllustration({...baseItem('image'),label:name||'Illustration',src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,artRef:['art',file],w,h,duration:backdrop?5:2.2},backdrop));
+      // A backdrop sits behind everything else in the scene and is drawn first.
+      if(backdrop){const items=scene().items;items.unshift(items.pop());changed();toast(`${name} backdrop added behind the scene and drawn first.`);}else toast(`${name||'Illustration'} added to the canvas.`);
     }catch(e){console.error(e);toast('Could not add that illustration.');}
   }
   function addTablerIcon(index){
     const [name,,,paths]=library.icons.icons[index];
     addItem({...baseItem('icon'),label:name.replace(/-/g,' ').replace(/^./,c=>c.toUpperCase()),iconPaths:paths,vb:[0,0,24,24],x:615,y:305,w:240,h:240,color:'#285d63',duration:1.8});
+  }
+  // Character builder: Open Peeps by Pablo Stanley (CC0), vendored in vendor/open-peeps. A character is a recipe of
+  // parts and colors, kept on the item so its expression can be changed later.
+  let peepsModule=null;
+  const loadPeeps=()=>peepsModule??=Promise.all([import('./vendor/open-peeps/index.js'),import('./vendor/open-peeps/schema.js')]).then(([m,s])=>({create:m.create,schema:s.schema.properties}));
+  const partName=key=>key.replace(/([a-z])([A-Z0-9])/g,'$1 $2').replace(/(\d+)$/,' $1').replace(/\s+/g,' ').replace(/^./,c=>c.toUpperCase());
+  async function characterSvg(p){
+    const {create}=await loadPeeps(),one=v=>v?[v]:[];
+    const prng={pick:(list,fallback)=>list&&list.length?list[0]:fallback,bool:chance=>chance>=50};
+    const r=create({prng,options:{head:one(p.head),face:one(p.face),facialHair:one(p.facialHair),facialHairProbability:p.facialHair?100:0,accessories:one(p.accessories),accessoriesProbability:p.accessories?100:0,mask:[],maskProbability:0,skinColor:[p.skin],clothingColor:[p.clothing],headContrastColor:[p.hair]}});
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${r.attributes.viewBox}" fill="none">${r.body}</svg>`;
+  }
+  const PEEP_COLORS={skin:['ffdbb4','edb98a','d08b5b','ae5d29','694d3d'],hair:['2c1b18','6a4e35','b58143','d6b370','e8e1e1','f59797'],clothing:['e78276','ffcf77','fdea6b','78e185','9ddadb','8fa7df','e279c7','2b3a4a','ffffff']};
+  function characterBuilder(){
+    const p=library.peep,select=(label,key,list,none)=>`<div class="field"><label>${label}</label><select data-peep="${key}">${none?`<option value="">${none}</option>`:''}${list.map(v=>`<option value="${v}" ${p[key]===v?'selected':''}>${partName(v)}</option>`).join('')}</select></div>`;
+    const swatches=(label,key)=>`<div class="tone-row"><span>${label}</span>${PEEP_COLORS[key].map(c=>`<button class="tone ${p[key]===c?'active':''}" data-peep-color="${key}" data-value="${c}" style="background:#${c}" title="#${c}"></button>`).join('')}</div>`;
+    const parts=library.peepParts;
+    return `<p class="panel-help">Build a hand-drawn character, then reuse them with different expressions.</p><div id="characterPreview" class="character-preview"></div>
+      ${parts?`${select('Expression','face',parts.face)}${select('Hair','head',parts.head)}<div class="field-row">${select('Facial hair','facialHair',parts.facialHair,'None')}${select('Glasses','accessories',parts.accessories,'None')}</div>${swatches('Skin','skin')}${swatches('Hair color','hair')}${swatches('Shirt','clothing')}
+      <div class="panel-actions"><button class="panel-action" data-peep-shuffle>Shuffle</button><button class="button primary" data-peep-add>Add to canvas</button></div>`:'<p class="lib-count">Loading the character parts…</p>'}
+      <div class="note-card">Characters are Open Peeps by Pablo Stanley, free to use in your videos without credit.</div>`;
+  }
+  // The lists of parts, once the pieces have loaded; until then this starts loading them and redraws the panel after.
+  function peepParts(){
+    if(library.peepParts)return library.peepParts;
+    loadPeeps().then(({schema})=>{if(library.peepParts)return;library.peepParts={face:schema.face.items.enum,head:schema.head.items.enum,facialHair:schema.facialHair.items.enum,accessories:schema.accessories.items.enum.filter(x=>x!=='eyepatch')};renderInspector();}).catch(e=>{console.error(e);toast('The character parts could not load.');});
+    return null;
+  }
+  async function showCharacterPreview(){
+    if(!peepParts())return;const box=$('#characterPreview');
+    try{if(box)box.innerHTML=await characterSvg(library.peep);}catch(e){console.error(e);if(box)box.textContent='The character could not be drawn.';}
+  }
+  function characterFaceField(it){
+    const parts=peepParts();if(!parts)return '';
+    return `<div class="field"><label>Expression</label><select data-character-face>${parts.face.map(v=>`<option value="${v}" ${it.character.face===v?'selected':''}>${partName(v)}</option>`).join('')}</select></div>`;
+  }
+  function shuffleCharacter(){
+    const parts=library.peepParts,pick=list=>list[Math.floor(Math.random()*list.length)];if(!parts)return;
+    library.peep={head:pick(parts.head),face:pick(['smile','smileBig','calm','cute','explaining','cheeky','smileLOL','driven','serious']),facialHair:Math.random()<.3?pick(parts.facialHair):'',accessories:Math.random()<.25?pick(parts.accessories):'',skin:pick(PEEP_COLORS.skin),hair:pick(PEEP_COLORS.hair),clothing:pick(PEEP_COLORS.clothing)};
+  }
+  async function characterArt(p){const art=await rasterizeSvg(await characterSvg(p)),trace=await traceImage(art.src);return {art,trace};}
+  async function addCharacter(){
+    try{const p={...library.peep},{art,trace}=await characterArt(p);
+      addItem(await withIllustration({...baseItem('image'),label:`Character (${partName(p.face).toLowerCase()})`,src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,character:p,w:360,h:360*art.height/art.width,duration:2.6}));toast('Character added to the canvas.');}
+    catch(e){console.error(e);toast('Could not add that character.');}
+  }
+  // Swaps a placed character's expression, keeping its place, size and timing.
+  async function setCharacterFace(it,face){
+    if(!it?.character||it.character.face===face)return;
+    try{const p={...it.character,face},{art,trace}=await characterArt(p),plan=await planIllustration(art.src);
+      snapshot();Object.assign(it,{character:p,src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,illustration:plan,label:`Character (${partName(face).toLowerCase()})`});changed();}
+    catch(e){console.error(e);toast('Could not change the expression.');}
   }
   async function addSheetDrawing(sheetIndex,drawingIndex){
     const sheet=SHEETS[sheetIndex],name=sheet?.items[drawingIndex];if(!name)return;
@@ -1219,6 +1505,8 @@
     for(const s of p.scenes)for(const it of s.items){
       if(it.animation==='reveal')it.animation='draw';
       if(it.type==='text'&&!it.font)it.font='futural';
+      // The bundled "cursive" pen font is the same as "script".
+      if(it.type==='text'&&it.font==='cursive')it.font='scripts';
       if(it.type==='image'&&Array.isArray(it.sheetRef)&&it.sheetRef[0]>=10&&it.cropVersion!==2){
         try{
           const art=await cropSheetDrawing(it.sheetRef[0],it.sheetRef[1]),trace=await traceImage(art.src),centerY=it.y+it.h/2;
@@ -1291,7 +1579,78 @@
     return {svg:`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}" viewBox="${box.join(' ')}">${markup}</svg>`,box,hand};
   }
   function paintSvg(ctx,t){return new Promise((resolve,reject)=>{const frame=svgForTime(t,ctx.canvas.width,ctx.canvas.height),url=URL.createObjectURL(new Blob([frame.svg],{type:'image/svg+xml'})),img=new Image();img.onload=()=>{ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.drawImage(img,0,0,ctx.canvas.width,ctx.canvas.height);if(frame.hand&&state.handImage){const [x,y,w,h]=frame.box,sx=ctx.canvas.width/w,sy=ctx.canvas.height/h;ctx.drawImage(state.handImage,(frame.hand.x-HAND.x-x)*sx,(frame.hand.y-HAND.y-y)*sy,HAND.w*sx,HAND.h*sy);}URL.revokeObjectURL(url);resolve();};img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Frame could not be drawn'));};img.src=url;});}
+  // Export renders the video frame by frame (never in real time, so nothing is dropped) and encodes it with WebCodecs
+  // into an MP4 written by mp4-muxer (vendor/mp4-muxer, MIT). The file has its index at the start and a keyframe every
+  // two seconds, so it plays and scrubs in any player. The audio clips are mixed offline into the same file.
+  const EXPORT_SIZES=[['720','720p'],['1080','1080p (Full HD)'],['1440','1440p'],['2160','4K']],EXPORT_QUALITY=[['standard','Standard',.07],['high','High',.12],['max','Maximum',.2]];
+  const exportPrefs={size:'1080',fps:30,quality:'high',range:'all',audio:true};
+  function exportDimensions(size){const n=+size,r=state.project.ratio;return r==='1:1'?[n,n]:r==='9:16'?[n,Math.round(n*16/9/2)*2]:[Math.round(n*16/9/2)*2,n];}
+  function exportRange(range){return range==='scene'?[sceneStart(state.sceneIndex),sceneStart(state.sceneIndex)+sceneLen(scene())]:[0,totalLen()];}
+  function exportBitrate(o){const [w,h]=exportDimensions(o.size);return Math.round(w*h*o.fps*(EXPORT_QUALITY.find(q=>q[0]===o.quality)?.[2]||.12));}
+  // The smallest H.264 High profile level that fits the frame size and rate.
+  function avcCodec([w,h],fps){const mbs=Math.ceil(w/16)*Math.ceil(h/16),levels=[[31,108000,3600],[40,245760,8192],[42,522240,8704],[50,589824,22080],[51,983040,36864],[52,2073600,36864]],level=levels.find(([,rate,size])=>mbs*fps<=rate&&mbs<=size)||levels[levels.length-1];return `avc1.6400${level[0].toString(16).padStart(2,'0')}`;}
+  function exportSummary(){
+    const o=exportPrefs,[w,h]=exportDimensions(o.size),[t0,t1]=exportRange(o.range),seconds=Math.max(0,t1-t0),mb=(exportBitrate(o)+(o.audio&&hasAudio()?192000:0))*seconds/8/1e6;
+    return `${w} × ${h} · ${o.fps} fps · ${fmt(seconds)} long · about ${mb<1?mb.toFixed(1):Math.round(mb)} MB`;
+  }
+  function showExportOptions(){
+    if(state.exporting)return;if(totalLen()<.2){toast('Add something to the timeline before exporting.');return;}
+    const o=exportPrefs,pick=(key,list)=>`<select data-export="${key}">${list.map(([v,n])=>`<option value="${v}" ${String(o[key])===String(v)?'selected':''}>${n}</option>`).join('')}</select>`,modern=!!window.VideoEncoder;
+    modal(`<div class="modal-top"><h2>Export video</h2><button class="close-button" data-modal="close">×</button></div>
+      <p class="panel-help">${modern?'Each frame is drawn in full and encoded as an MP4 (H.264) that plays and scrubs in any player.':'This browser cannot encode frame by frame, so the video will be recorded in real time instead. For the best file, export in Chrome or Edge.'}</p>
+      <div class="field"><label>File name</label><input id="exportName" value="${esc(safeFilename(state.project.name))}" maxlength="80"></div>
+      <div class="field-row"><div class="field"><label>Resolution</label>${pick('size',EXPORT_SIZES)}</div><div class="field"><label>Frame rate</label>${pick('fps',[[24,'24 fps (film)'],[30,'30 fps'],[60,'60 fps (smoothest)']])}</div></div>
+      <div class="field-row"><div class="field"><label>Quality</label>${pick('quality',EXPORT_QUALITY)}</div><div class="field"><label>Range</label>${pick('range',[['all','Whole video'],['scene',`This scene (${esc(scene().name)})`]])}</div></div>
+      <label class="check-row"><input type="checkbox" data-export="audio" ${o.audio?'checked':''} ${hasAudio()?'':'disabled'}> Include audio${hasAudio()?'':' (no audio clips yet)'}</label>
+      <p id="exportSummary" class="lib-count">${exportSummary()}</p>
+      <div class="modal-foot"><button class="button ghost" data-modal="close">Cancel</button><button class="button primary" data-export-start>Export MP4</button></div>`);
+  }
+  // Mixes the audio clips between video times t0 and t1 into a stereo buffer.
+  async function mixAudio(t0,t1,rate=48000){
+    await Promise.all(Object.values(state.project.audioFiles||{}).map(f=>loadAudioFile(f).catch(()=>{})));
+    const ctx=new OfflineAudioContext(2,Math.max(1,Math.ceil((t1-t0)*rate)),rate);scheduleClips(ctx,t0,ctx.destination,0);return ctx.startRendering();
+  }
   async function exportVideo(){
+    const o={...exportPrefs},name=safeFilename($('#exportName')?.value||state.project.name);
+    if(!window.VideoEncoder){recordVideoRealtime(name);return;}
+    const [w,h]=exportDimensions(o.size),[t0,t1]=exportRange(o.range),fps=+o.fps,frames=Math.max(1,Math.ceil((t1-t0)*fps)),bitrate=exportBitrate(o),withAudio=o.audio&&hasAudio();
+    const codecs=[avcCodec([w,h],fps),'avc1.4d0034','avc1.640034'],configs=codecs.map(codec=>({codec,width:w,height:h,bitrate,framerate:fps,avc:{format:'avc'},latencyMode:'quality'}));
+    let config=null;for(const c of configs){try{if((await VideoEncoder.isConfigSupported(c)).supported){config=c;break;}}catch{}}
+    if(!config){toast(`This browser cannot encode ${w} × ${h} video. Try a smaller resolution.`);return;}
+    pause();state.exporting=true;state.exportCancelled=false;await ensureHandwriting();
+    modal(`<div class="modal-top"><h2>Exporting your video</h2></div><p class="panel-help">${w} × ${h} at ${fps} fps. Every frame is drawn in full, so this can take a little while; you can keep using other tabs.</p><div class="export-progress"><div id="progressBar"></div></div><p id="exportStatus" class="panel-help">Preparing…</p><div class="modal-foot"><button class="button ghost" data-export-cancel>Cancel export</button></div>`);
+    const status=text=>{const el=$('#exportStatus');if(el)el.textContent=text;},bar=f=>{const el=$('#progressBar');if(el)el.style.width=`${Math.round(f*100)}%`;};
+    let videoEncoder=null,audioEncoder=null;
+    try{
+      const {Muxer,ArrayBufferTarget}=await import('./vendor/mp4-muxer/mp4-muxer.js');
+      let audioCodec=null;
+      if(withAudio&&window.AudioEncoder){for(const [codec,kind] of [['mp4a.40.2','aac'],['opus','opus']]){try{if((await AudioEncoder.isConfigSupported({codec,sampleRate:48000,numberOfChannels:2,bitrate:192000})).supported){audioCodec={codec,kind};break;}}catch{}}}
+      const target=new ArrayBufferTarget(),muxer=new Muxer({target,fastStart:'in-memory',video:{codec:'avc',width:w,height:h,frameRate:fps},...(audioCodec?{audio:{codec:audioCodec.kind,numberOfChannels:2,sampleRate:48000}}:{})});
+      let failure=null;
+      videoEncoder=new VideoEncoder({output:(chunk,meta)=>muxer.addVideoChunk(chunk,meta),error:e=>{failure=e;}});videoEncoder.configure(config);
+      const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d',{alpha:false}),started=performance.now();
+      for(let i=0;i<frames;i++){
+        if(state.exportCancelled)throw new Error('cancelled');if(failure)throw failure;
+        ctx.fillStyle='#ffffff';ctx.fillRect(0,0,w,h);await paintSvg(ctx,Math.min(t1,t0+i/fps));
+        const frame=new VideoFrame(canvas,{timestamp:Math.round(i*1e6/fps),duration:Math.round(1e6/fps)});videoEncoder.encode(frame,{keyFrame:i%(fps*2)===0});frame.close();
+        while(videoEncoder.encodeQueueSize>6)await new Promise(r=>setTimeout(r,4));
+        if(i%3===0||i===frames-1){const done=(i+1)/frames,left=(performance.now()-started)/done*(1-done)/1000;bar(done*(audioCodec?.92:1));status(`Frame ${i+1} of ${frames} · about ${left<60?Math.ceil(left)+' s':Math.ceil(left/60)+' min'} left`);}
+      }
+      await videoEncoder.flush();
+      if(audioCodec){
+        status('Mixing the audio…');const mix=await mixAudio(t0,t1),rate=mix.sampleRate,left=mix.getChannelData(0),right=mix.getChannelData(1);
+        audioEncoder=new AudioEncoder({output:(chunk,meta)=>muxer.addAudioChunk(chunk,meta),error:e=>{failure=e;}});audioEncoder.configure({codec:audioCodec.codec,sampleRate:rate,numberOfChannels:2,bitrate:192000});
+        for(let at=0;at<mix.length;at+=4800){const n=Math.min(4800,mix.length-at),data=new Float32Array(n*2);data.set(left.subarray(at,at+n),0);data.set(right.subarray(at,at+n),n);
+          const chunk=new AudioData({format:'f32-planar',sampleRate:rate,numberOfFrames:n,numberOfChannels:2,timestamp:Math.round(at/rate*1e6),data});audioEncoder.encode(chunk);chunk.close();}
+        await audioEncoder.flush();if(failure)throw failure;bar(1);
+      }else if(withAudio)toast('This browser cannot encode audio, so the video was exported without sound.');
+      status('Finishing the file…');muxer.finalize();
+      download(new Blob([target.buffer],{type:'video/mp4'}),`${name}.mp4`);closeModal();toast(`Exported ${name}.mp4`);
+    }catch(e){closeModal();if(e?.message==='cancelled')toast('Export cancelled.');else{console.error(e);toast(`Export failed: ${e?.message||e}`);}}
+    finally{try{videoEncoder?.state!=='closed'&&videoEncoder?.close();}catch{}try{audioEncoder?.state!=='closed'&&audioEncoder?.close();}catch{}state.exporting=false;}
+  }
+  // Fallback for browsers without WebCodecs: records the canvas in real time.
+  async function recordVideoRealtime(name){
     if(state.exporting)return;
     if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream){toast('Video export is unavailable in this browser.');return;}
     if(totalLen()<.2){toast('Add something to the timeline before exporting.');return;}
@@ -1310,7 +1669,7 @@
       recorder.start(1000);if(audioOut)startClips(0,audioOut);const start=performance.now(),duration=totalLen();let lastFrame=-1;
       while(true){let t=clamp((performance.now()-start)/1000,0,duration),frame=Math.floor(t*30);if(frame!==lastFrame){await paintSvg(ctx,t);lastFrame=frame;$('#progressBar').style.width=`${Math.round(t/duration*100)}%`;$('#exportStatus').textContent=`Rendering ${fmt(t)} of ${fmt(duration)}…`;}
         if(t>=duration)break;await new Promise(r=>setTimeout(r,12));}
-      recorder.stop();stopClips();const blob=await ended;download(blob,`${safeFilename(state.project.name)}.${mime.includes('mp4')?'mp4':'webm'}`);closeModal();toast('Video exported.');
+      recorder.stop();stopClips();const blob=await ended;download(blob,`${name}.${mime.includes('mp4')?'mp4':'webm'}`);closeModal();toast('Video exported.');
     }catch(e){console.error(e);if(recorder?.state==='recording')recorder.stop();closeModal();toast(`Export failed: ${e.message}`);}
     finally{stream.getTracks().forEach(x=>x.stop());stopClips();audioOut?.disconnect();state.exporting=false;}
   }
@@ -1441,9 +1800,10 @@
     if(pen)markup+=handMarkup(it.x+pen.x*it.w,it.y+pen.y*it.h-pen.lift*Math.min(it.w,it.h)*.06);
     return markup;
   }
-  // Adds the illustration plan to artwork with a transparent background; other images keep the generic tracing.
-  async function withIllustration(fields){
-    if(!fields.transparentArtwork)return fields;
+  // Adds the illustration plan to artwork with a transparent background (or any artwork when forced, as for backdrops);
+  // other images keep the generic tracing.
+  async function withIllustration(fields,force=false){
+    if(!fields.transparentArtwork&&!force)return fields;
     try{return {...fields,illustration:await planIllustration(fields.src),duration:Math.max(num(fields.duration,2.2),3.2)};}catch(e){console.error('Could not plan the illustration',e);return fields;}
   }
   async function traceImage(src){
@@ -1533,6 +1893,10 @@
     const it=item(),items=scene().items;
     if(name==='scene-delete'){if(state.project.scenes.length===1)return;snapshot();state.project.scenes.splice(state.sceneIndex,1);state.sceneIndex=Math.max(0,state.sceneIndex-1);state.selected=null;state.time=sceneStart(state.sceneIndex);changed();return;}
     if(name==='preview-camera'){previewCamera();return;}
+    if(name==='narrate'){stopPreviewVoice();narrateScene(scene());return;}
+    if(name==='preview-script'){const text=String(scene().script||'').trim();if(text)previewVoice(text,'script');else toast('Write a script for this scene first.');return;}
+    if(name==='preview-voice'){const label=(VOICES.find(v=>v[0]===voiceSettings().voice)?.[1]||'').split(' · ')[0];previewVoice(`Hello, I'm ${label}. This is how I sound telling your story.`,'voice');return;}
+    if(name==='narrate-all'){narrateAll();return;}
     if(!it)return;
     const index=items.findIndex(x=>x.id===it.id);snapshot();
     if(name==='delete'){items.splice(index,1);state.selected=null;}
@@ -1558,14 +1922,18 @@
   }
   function bind(){
     document.querySelectorAll('.tool').forEach(b=>b.addEventListener('click',()=>{stopPreview();state.tool=b.dataset.tool;state.selected=null;if(state.tool==='text')addText();else if(state.tool==='upload')$('#uploadInput').click();else if(state.tool==='camera')addCamera();else{renderAll();}}));
-    $('#inspector').addEventListener('click',e=>{const icon=e.target.closest('[data-icon]'),sheet=e.target.closest('[data-sheet-item]'),shape=e.target.closest('[data-shape]'),ratio=e.target.closest('[data-ratio]'),align=e.target.closest('[data-align]'),act=e.target.closest('[data-action]');if(align){const it=item();if(it?.type==='text'&&(it.align||'left')!==align.dataset.align){snapshot();it.align=align.dataset.align;scheduleHandwriting(it);changed();}}const tab=e.target.closest('[data-lib-tab]'),emoji=e.target.closest('[data-emoji]'),tabler=e.target.closest('[data-tabler]');
+    $('#inspector').addEventListener('click',e=>{const icon=e.target.closest('[data-icon]'),sheet=e.target.closest('[data-sheet-item]'),shape=e.target.closest('[data-shape]'),ratio=e.target.closest('[data-ratio]'),align=e.target.closest('[data-align]'),act=e.target.closest('[data-action]');if(align){const it=item();if(it?.type==='text'&&(it.align||'left')!==align.dataset.align){snapshot();it.align=align.dataset.align;scheduleHandwriting(it);changed();}}const font=e.target.closest('[data-font]');if(font){const it=item();if(it?.type==='text'&&it.font!==font.dataset.font){snapshot();applyField('font',font.dataset.font);renderInspector();}return;}const tab=e.target.closest('[data-lib-tab]'),art=e.target.closest('[data-art]'),tabler=e.target.closest('[data-tabler]'),tone=e.target.closest('[data-lib-tone]'),color=e.target.closest('[data-peep-color]');
       if(tab&&library.tab!==tab.dataset.libTab){library.tab=tab.dataset.libTab;library.category='all';library.limit=LIBRARY_PAGE;renderInspector();}
       if(e.target.closest('[data-lib-more]')){library.limit+=LIBRARY_PAGE;showLibraryResults();}
-      if(emoji)addEmojiDrawing(emoji.dataset.emoji);if(tabler)addTablerIcon(+tabler.dataset.tabler);
+      if(tone){library.tone=tone.dataset.libTone;document.querySelectorAll('[data-lib-tone]').forEach(b=>b.classList.toggle('active',b===tone));showLibraryResults();}
+      if(color){library.peep[color.dataset.peepColor]=color.dataset.value;document.querySelectorAll(`[data-peep-color="${color.dataset.peepColor}"]`).forEach(b=>b.classList.toggle('active',b===color));showCharacterPreview();}
+      if(e.target.closest('[data-peep-shuffle]')){shuffleCharacter();renderInspector();}
+      if(e.target.closest('[data-peep-add]'))addCharacter();
+      if(art)addArtDrawing(art.dataset.art,art.dataset.artName);if(tabler)addTablerIcon(+tabler.dataset.tabler);
       if(icon)addIcon(icon.dataset.icon);if(sheet)addSheetDrawing(+sheet.dataset.sheet,+sheet.dataset.sheetItem);if(shape)addShape(shape.dataset.shape);if(ratio){snapshot();state.project.ratio=ratio.dataset.ratio;changed();}if(act)action(act.dataset.action);});
     $('#inspector').addEventListener('focusin',e=>{if(e.target.matches('[data-set]'))snapshot();});
     $('#inspector').addEventListener('input',e=>{if(e.target.id==='librarySearch'){library.query=e.target.value;library.limit=LIBRARY_PAGE;showLibraryResults();}else if(e.target.matches('[data-set]'))applyField(e.target.dataset.set,e.target.value);});
-    $('#inspector').addEventListener('change',e=>{if(e.target.id==='libraryCategory'){library.category=e.target.value;library.limit=LIBRARY_PAGE;showLibraryResults();return;}if(e.target.matches('[data-set]')){applyField(e.target.dataset.set,e.target.value);renderInspector();}});
+    $('#inspector').addEventListener('change',e=>{if(e.target.matches('[data-peep]')){library.peep[e.target.dataset.peep]=e.target.value;showCharacterPreview();return;}if(e.target.matches('[data-character-face]')){setCharacterFace(item(),e.target.value);return;}if(e.target.id==='libraryCategory'){library.category=e.target.value;library.limit=LIBRARY_PAGE;showLibraryResults();return;}if(e.target.matches('[data-set]')){applyField(e.target.dataset.set,e.target.value);renderInspector();}});
     $('#stage').addEventListener('pointerdown',e=>{
       if(state.preview||e.button>1)return;
       if(state.tool==='pan'||e.button===1){state.drag={mode:'pan',clientX:e.clientX,clientY:e.clientY,view:{...state.editorView}};$('#stage').setPointerCapture(e.pointerId);return;}
@@ -1584,15 +1952,22 @@
       renderStage();
     });
     const endDrag=()=>{if(!state.drag)return;const wasPan=state.drag.mode==='pan',dragged=scene().items.find(x=>x.id===state.drag.id),resized=state.drag.mode==='resize';state.drag=null;if(wasPan){saveEditorView();renderStage();}else{if(resized&&dragged?.type==='text')scheduleHandwriting(dragged);changed(false);renderInspector();}};$('#stage').addEventListener('pointerup',endDrag);$('#stage').addEventListener('pointercancel',endDrag);
-    bindTimeline();bindAudio();
+    bindTimeline();bindAudio();bindEditing();
     $('#projectName').addEventListener('focus',()=>snapshot());$('#projectName').addEventListener('input',e=>{state.project.name=e.target.value.slice(0,80);changed(false);});
     $('#addSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();state.project.scenes.push({id:id(),name:`Scene ${state.project.scenes.length+1}`,background:'#ffffff',items:[]});state.sceneIndex=state.project.scenes.length-1;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
     $('#duplicateSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();const copy=clone(scene());copy.id=id();copy.name+=` copy`;copy.items.forEach(x=>x.id=id());state.project.scenes.splice(state.sceneIndex+1,0,copy);state.sceneIndex++;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
     $('#playBtn').addEventListener('click',play);$('#previewBtn').addEventListener('click',()=>{if(state.playing)pause();else play();});$('#restartBtn').addEventListener('click',()=>seek(0));$('#stopBtn').addEventListener('click',stop);$('#topStopBtn').addEventListener('click',stop);$('#fitBtn').addEventListener('click',fitContent);$('#zoomInBtn').addEventListener('click',()=>zoomEditor(.8));$('#zoomOutBtn').addEventListener('click',()=>zoomEditor(1.25));
-    $('#scrubber').addEventListener('input',e=>seek(+e.target.value/1000*totalLen()));$('#exportBtn').addEventListener('click',exportVideo);$('#projectsBtn').addEventListener('click',showProjects);
+    $('#scrubber').addEventListener('input',e=>seek(+e.target.value/1000*totalLen()));$('#exportBtn').addEventListener('click',showExportOptions);$('#projectsBtn').addEventListener('click',showProjects);
     $('#uploadInput').addEventListener('change',async e=>{await uploadImage(e.target.files[0]);e.target.value='';});$('#audioInput').addEventListener('change',async e=>{await uploadAudio(e.target.files[0],state.audioLane??0);e.target.value='';});$('#projectBackupInput').addEventListener('change',async e=>{await importProjectBackup(e.target.files[0]);e.target.value='';});
-    $('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){if(!state.exporting)closeModal();return;}const b=e.target.closest('[data-modal],[data-open],[data-delete-project]');if(!b)return;if(b.dataset.deleteProject)deleteProject(b.dataset.deleteProject);else if(b.dataset.open)loadProject(b.dataset.open);else if(b.dataset.modal==='close'&&!state.exporting)closeModal();else if(b.dataset.modal==='new')showNewProject();else if(b.dataset.modal==='create')createProject();else if(b.dataset.modal==='backup')downloadProjectBackup();else if(b.dataset.modal==='import')$('#projectBackupInput').click();});
-    document.addEventListener('keydown',e=>{const typing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(e.ctrlKey||e.metaKey){if(e.key.toLowerCase()==='z'){e.preventDefault();if(state.undo.length){state.redo.push(clone(state.project));state.project=state.undo.pop();state.sceneIndex=clamp(state.sceneIndex,0,state.project.scenes.length-1);state.selected=null;changed();}return;}if(e.key.toLowerCase()==='y'){e.preventDefault();if(state.redo.length){state.undo.push(clone(state.project));state.project=state.redo.pop();state.sceneIndex=clamp(state.sceneIndex,0,state.project.scenes.length-1);state.selected=null;changed();}return;}}if(typing)return;if(e.altKey&&state.selected&&(e.key==='ArrowLeft'||e.key==='ArrowRight')){e.preventDefault();action(e.key==='ArrowLeft'?'back':'forward');return;}if(e.code==='Space'){e.preventDefault();play();}if((e.key==='Delete'||e.key==='Backspace')&&state.selected){e.preventDefault();action('delete');}else if((e.key==='Delete'||e.key==='Backspace')&&state.selectedClip){e.preventDefault();clipAction('delete');}if(e.key==='Escape'&&state.preview)stop();});
+    $('#modal').addEventListener('change',e=>{const f=e.target.closest('[data-export]');if(!f)return;exportPrefs[f.dataset.export]=f.type==='checkbox'?f.checked:f.dataset.export==='fps'?+f.value:f.value;const sum=$('#exportSummary');if(sum)sum.textContent=exportSummary();});
+    $('#modal').addEventListener('click',e=>{if(e.target===$('#modal')){if(!state.exporting)closeModal();return;}if(e.target.closest('[data-export-start]')){exportVideo();return;}if(e.target.closest('[data-export-cancel]')){state.exportCancelled=true;const s=$('#exportStatus');if(s)s.textContent='Cancelling…';return;}const b=e.target.closest('[data-modal],[data-open],[data-delete-project]');if(!b)return;if(b.dataset.deleteProject)deleteProject(b.dataset.deleteProject);else if(b.dataset.open)loadProject(b.dataset.open);else if(b.dataset.modal==='close'&&!state.exporting)closeModal();else if(b.dataset.modal==='new')showNewProject();else if(b.dataset.modal==='create')createProject();else if(b.dataset.modal==='backup')downloadProjectBackup();else if(b.dataset.modal==='import')$('#projectBackupInput').click();});
+    document.addEventListener('keydown',e=>{const typing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName),key=e.key.toLowerCase();
+      if(e.ctrlKey||e.metaKey){if(key==='z'&&!typing){e.preventDefault();e.shiftKey?redo():undo();return;}if(key==='y'&&!typing){e.preventDefault();redo();return;}if(key==='d'&&!typing){e.preventDefault();editAction('duplicate');}return;}
+      if(typing)return;if(e.altKey&&state.selected&&(e.key==='ArrowLeft'||e.key==='ArrowRight')){e.preventDefault();action(e.key==='ArrowLeft'?'back':'forward');return;}
+      if(e.code==='Space'){e.preventDefault();play();return;}
+      if(key==='s'){e.preventDefault();editAction('split');return;}if(e.key==='['){e.preventDefault();editAction('trim-start');return;}if(e.key===']'){e.preventDefault();editAction('trim-end');return;}if(key==='c'){editAction('razor');return;}
+      if((e.key==='Delete'||e.key==='Backspace')&&state.selected){e.preventDefault();action('delete');}else if((e.key==='Delete'||e.key==='Backspace')&&state.selectedClip){e.preventDefault();clipAction('delete');}
+      if(e.key==='Escape'){closeClipMenu();if(state.razor)editAction('razor');else if(state.preview)stop();}});
     window.addEventListener('beforeunload',()=>{if(state.project)saveProject();});
   }
   async function init(){try{
