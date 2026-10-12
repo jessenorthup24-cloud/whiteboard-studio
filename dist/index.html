@@ -50,12 +50,13 @@
     </div>
 
     <section class="timeline-area">
+      <div id="timelineGrip" class="timeline-grip" title="Drag to resize the timeline"></div>
       <div class="timeline-header">
         <div class="timeline-title"><strong>Timeline</strong><span id="durationLabel">00:00</span></div>
         <div class="timeline-play"><button id="restartBtn" class="mini-button" title="Restart">↶</button><button id="playBtn" class="play-button" title="Play or pause">▶</button><button id="stopBtn" class="mini-button stop-button" title="Stop and go back to the start">■</button><span id="timeLabel">00:00 / 00:00</span></div>
         <div class="timeline-actions"><button id="addSceneBtn" class="button subtle small">+ Scene</button><button id="duplicateSceneBtn" class="button ghost small">Duplicate</button></div>
       </div>
-      <div class="timeline-body"><div id="sceneStrip" class="scene-strip"></div><div class="tracks"><div class="track-label">DRAW ORDER <span>Drag to reorder</span></div><div id="itemStrip" class="item-strip"></div><div class="audio-track"><span>♫ AUDIO</span><span id="audioTrackLabel">Add narration or music from the Audio tool</span></div></div></div>
+      <div class="timeline-body"><div id="sceneStrip" class="scene-strip"></div><div class="tracks"><div class="track-label">DRAW ORDER <span>Drag to reorder · drag edges for timing · drop on a scene to move</span></div><div id="itemStrip" class="item-strip"></div><div id="audioEditor" class="audio-editor"></div></div></div>
       <div class="scrub-row"><input id="scrubber" type="range" min="0" max="1000" value="0" aria-label="Video playhead"><span id="scrubPercent">0%</span></div>
     </section>
   </div>
