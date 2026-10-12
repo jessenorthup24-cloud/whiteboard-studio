@@ -277,12 +277,62 @@
     }
     cuts.push(dimension);return cuts;
   }
+  function separateColoredSheet(pixels,width,height,cols,rows){
+    const total=width*height,labels=new Uint16Array(total),queue=new Uint32Array(total),components=[];
+    for(let start=0;start<total;start++){
+      if(labels[start]||pixels[start*4+3]<32)continue;
+      const id=components.length+1;let head=0,tail=1,count=0,sumX=0,sumY=0,left=width,top=height,right=0,bottom=0;
+      queue[0]=start;labels[start]=id;
+      while(head<tail){
+        const pos=queue[head++],x=pos%width,y=Math.floor(pos/width);count++;sumX+=x;sumY+=y;
+        left=Math.min(left,x);top=Math.min(top,y);right=Math.max(right,x);bottom=Math.max(bottom,y);
+        let next;
+        if(x>0){next=pos-1;if(!labels[next]&&pixels[next*4+3]>=32){labels[next]=id;queue[tail++]=next;}}
+        if(x<width-1){next=pos+1;if(!labels[next]&&pixels[next*4+3]>=32){labels[next]=id;queue[tail++]=next;}}
+        if(y>0){next=pos-width;if(!labels[next]&&pixels[next*4+3]>=32){labels[next]=id;queue[tail++]=next;}}
+        if(y<height-1){next=pos+width;if(!labels[next]&&pixels[next*4+3]>=32){labels[next]=id;queue[tail++]=next;}}
+      }
+      components.push({id,count,cx:sumX/count,cy:sumY/count,left,top,right,bottom});
+    }
+    const groups=Array.from({length:cols*rows},()=>({left:width,top:height,right:-1,bottom:-1})),componentGroup=new Uint16Array(components.length+1);
+    const join=(comp,cell)=>{const group=groups[cell];componentGroup[comp.id]=cell+1;group.left=Math.min(group.left,comp.left);group.top=Math.min(group.top,comp.top);group.right=Math.max(group.right,comp.right);group.bottom=Math.max(group.bottom,comp.bottom);};
+    for(const comp of components){
+      if(comp.count<200)continue;
+      const col=Math.min(cols-1,Math.floor(comp.cx*cols/width)),row=Math.min(rows-1,Math.floor(comp.cy*rows/height));join(comp,row*cols+col);
+    }
+    for(const comp of components){
+      if(comp.count<12||comp.count>=200)continue;
+      let best=-1,bestDistance=Infinity;
+      for(let cell=0;cell<groups.length;cell++){
+        const group=groups[cell];if(group.right<0)continue;
+        const dx=Math.max(group.left-20-comp.right,comp.left-20-group.right,0),dy=Math.max(group.top-20-comp.bottom,comp.top-20-group.bottom,0),distance=dx*dx+dy*dy;
+        if(distance<bestDistance){bestDistance=distance;best=cell;}
+      }
+      if(best>=0&&bestDistance<=400)join(comp,best);
+    }
+    if(groups.some(group=>group.right<0))throw new Error('An illustration could not be isolated');
+    const drawings=[];
+    for(let cell=0;cell<groups.length;cell++){
+      const group=groups[cell],pad=Math.max(12,Math.round(Math.max(group.right-group.left,group.bottom-group.top)*.04));
+      const left=Math.max(0,group.left-pad),top=Math.max(0,group.top-pad),right=Math.min(width-1,group.right+pad),bottom=Math.min(height-1,group.bottom+pad),w=right-left+1,h=bottom-top+1;
+      const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+      const context=canvas.getContext('2d'),crop=context.createImageData(w,h);
+      for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+        const pos=(top+y)*width+left+x,component=labels[pos],belongs=componentGroup[component]===cell+1;
+        if(!belongs)continue;
+        const from=pos*4,to=(y*w+x)*4;crop.data[to]=pixels[from];crop.data[to+1]=pixels[from+1];crop.data[to+2]=pixels[from+2];crop.data[to+3]=pixels[from+3];
+      }
+      context.putImageData(crop,0,0);drawings.push({src:canvas.toDataURL('image/png'),width:w,height:h});
+    }
+    return drawings;
+  }
   async function sheetData(sheetIndex){
     if(sheetCache.has(sheetIndex))return sheetCache.get(sheetIndex);
     const pending=(async()=>{
       const sheet=SHEETS[sheetIndex],image=new Image();image.src=`./assets/sheets/${sheet.file}`;await image.decode();
       const width=image.naturalWidth,height=image.naturalHeight,canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
       const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);const pixels=ctx.getImageData(0,0,width,height).data;
+      if(sheet.cols)return {drawings:separateColoredSheet(pixels,width,height,sheet.cols,sheet.rows)};
       const columns=new Uint32Array(width),rows=new Uint32Array(height);
       for(let y=0;y<height;y++)for(let x=0;x<width;x++)if(pixels[(y*width+x)*4+3]>80){columns[x]++;rows[y]++;}
       const xs=gridCuts(columns,sheet.cols||2),ys=gridCuts(rows,sheet.rows||2),cells=[];
@@ -301,7 +351,7 @@
   }
   async function cropSheetDrawing(sheetIndex,drawingIndex){
     const key=`${sheetIndex}:${drawingIndex}`;if(cropCache.has(key))return cropCache.get(key);
-    const pending=(async()=>{const {image,cells}=await sheetData(sheetIndex),[x,y,w,h]=cells[drawingIndex],canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(image,x,y,w,h,0,0,w,h);return {src:canvas.toDataURL('image/png'),width:w,height:h};})().catch(e=>{cropCache.delete(key);throw e;});
+    const pending=(async()=>{const data=await sheetData(sheetIndex);if(data.drawings)return data.drawings[drawingIndex];const {image,cells}=data,[x,y,w,h]=cells[drawingIndex],canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(image,x,y,w,h,0,0,w,h);return {src:canvas.toDataURL('image/png'),width:w,height:h};})().catch(e=>{cropCache.delete(key);throw e;});
     cropCache.set(key,pending);return pending;
   }
   function hydrateSheetThumbnails(){
@@ -322,7 +372,7 @@
     try{
       const art=await cropSheetDrawing(sheetIndex,drawingIndex),trace=await traceImage(art.src);
       let w=sheet.cols?330:420,h=w*art.height/art.width;if(h>470){w*=470/h;h=470;}
-      addItem({...baseItem('image'),label:name,src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,sheetRef:[sheetIndex,drawingIndex],w,h,duration:2.2});toast(`${name} added to the canvas.`);
+      addItem({...baseItem('image'),label:name,src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,sheetRef:[sheetIndex,drawingIndex],cropVersion:2,w,h,duration:2.2});toast(`${name} added to the canvas.`);
     }catch(e){console.error(e);toast('Could not add that illustration.');}
   }
   function textSignature(it){return JSON.stringify([it.text,it.font,it.fontSize,it.color,it.w,it.h]);}
@@ -377,6 +427,13 @@
     for(const s of p.scenes)for(const it of s.items){
       if(it.animation==='reveal')it.animation='draw';
       if(it.type==='text'&&!it.font)it.font='futural';
+      if(it.type==='image'&&Array.isArray(it.sheetRef)&&it.sheetRef[0]>=10&&it.cropVersion!==2){
+        try{
+          const art=await cropSheetDrawing(it.sheetRef[0],it.sheetRef[1]),trace=await traceImage(art.src),centerY=it.y+it.h/2;
+          it.src=art.src;it.h=it.w*art.height/art.width;it.y=centerY-it.h/2;
+          it.tracePaths=trace.paths;it.fillPaths=trace.fillPaths;it.transparentArtwork=trace.transparent;it.cropVersion=2;
+        }catch(e){console.error('Could not refresh illustration',e);}
+      }
       if(it.type==='image'&&it.src&&(!Array.isArray(it.tracePaths)||!Array.isArray(it.fillPaths)||it.transparentArtwork==null)){
         try{const trace=await traceImage(it.src);it.tracePaths=trace.paths;it.fillPaths=trace.fillPaths;it.transparentArtwork=trace.transparent;}
         catch{it.tracePaths=it.tracePaths||[];it.fillPaths=[];it.transparentArtwork=false;}
