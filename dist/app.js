@@ -20,7 +20,8 @@
     pencil:{name:'Pencil',paths:['M19 75 72 22l8 8-53 53-15 4z','M64 30l8 8','M16 88h70']}
   };
   const iconKeys = Object.keys(ICONS);
-  const FONT_OPTIONS = [['futural','Clean marker'],['futuram','Bold marker'],['scripts','Script marker'],['scriptc','Bold script'],['cursive','Cursive'],['gothiceng','Gothic'],['gothicita','Gothic italic'],['timesr','Classic serif'],['timesi','Italic serif'],['timesrb','Bold serif']];
+  const HANDWRITING_FONTS = {patrick:'Patrick Hand',kalam:'Kalam',indie:'Indie Flower',caveat:'Caveat',gochi:'Gochi Hand',handlee:'Handlee',architects:'Architects Daughter',shadows:'Shadows Into Light',gloria:'Gloria Hallelujah',permanent:'Permanent Marker'};
+  const FONT_OPTIONS = [['patrick','Classic whiteboard · Patrick Hand'],['kalam','Natural marker · Kalam'],['indie','Casual hand · Indie Flower'],['caveat','Flowing hand · Caveat'],['gochi','Playful marker · Gochi Hand'],['handlee','Neat hand · Handlee'],['architects','Architect hand'],['shadows','Light hand · Shadows Into Light'],['gloria','Lively hand · Gloria Hallelujah'],['permanent','Heavy marker · Permanent Marker'],['futural','Simple stroke'],['futuram','Bold stroke'],['scripts','Script stroke'],['scriptc','Bold script stroke'],['cursive','Cursive stroke'],['gothiceng','Gothic stroke'],['gothicita','Gothic italic stroke'],['timesr','Serif stroke'],['timesi','Italic serif stroke'],['timesrb','Bold serif stroke']];
   const SHEETS = [
     {name:'People',file:'people.png',items:['Man','Woman','Girl','Boy']},
     {name:'Nature',file:'nature.png',items:['Bush','Tree','Flower','Leaf']},
@@ -31,9 +32,21 @@
     {name:'Home',file:'home.png',items:['House','Couch','Lamp','Table']},
     {name:'Work',file:'work.png',items:['Laptop','Briefcase','Phone','Coffee mug']},
     {name:'Education',file:'education.png',items:['Book','Pencil','Backpack','Globe']},
-    {name:'Celebration',file:'celebration.png',items:['Heart','Apple','Cupcake','Gift']}
+    {name:'Celebration',file:'celebration.png',items:['Heart','Apple','Cupcake','Gift']},
+    {name:'Bible era people',file:'biblical-people.png',cols:4,rows:3,items:['Man in a robe','Woman in a robe','Boy in a tunic','Girl in a tunic','Elder man','Elder woman','Shepherd','Farmer','Fisherman','Traveler','Priest','Scribe']},
+    {name:'Bible era animals',file:'biblical-animals.png',cols:4,rows:3,items:['Donkey','Sheep','Lamb','Goat','Ox','Camel','Horse','Dove','Snake','Lion','Fish','Rooster']},
+    {name:'Garden and nature',file:'biblical-eden-nature.png',cols:4,rows:3,items:['Garden','Fruit tree','Palm tree','Olive tree','Grape vine','Flowering bush','River','Mountain','Wheat stalks','Fig branch','Lily','Date cluster']},
+    {name:'Farming tools',file:'biblical-farming.png',cols:4,rows:3,items:['Wooden plow','Sickle','Hoe','Rake','Seed bag','Grain bundle','Harvest basket','Water jug','Millstone','Threshing fork','Ox yoke','Vineyard trellis']},
+    {name:'Household objects',file:'biblical-household.png',cols:4,rows:3,items:['Clay vase','Amphora','Oil lamp','Drinking cup','Wooden bowl','Pitcher','Woven basket','Bread oven','Storage jar','Water well','Woven mat','Wooden stool']},
+    {name:'Food and harvest',file:'biblical-food.png',cols:4,rows:3,items:['Bread loaf','Fish','Grapes','Figs','Olives','Pomegranate','Dates','Honey jar','Wheat sheaf','Lentil bowl','Wine cup','Almond branch']},
+    {name:'Places',file:'biblical-places.png',cols:4,rows:3,items:['Stone house','Nomad tent','City gate','Village well','Watchtower','Synagogue','Temple','Stable','Courtyard','Stone bridge','Vineyard','Desert oasis']},
+    {name:'Travel',file:'biblical-travel.png',cols:4,rows:3,items:['Sandals','Walking staff','Travel cloak','Satchel','Wooden cart','Fishing boat','Fishing net','Oar','Donkey saddle','Wagon wheel','Lantern','Rope coil']},
+    {name:'Sacred objects',file:'biblical-sacred.png',cols:4,rows:3,items:['Scroll','Stone tablets','Menorah','Altar','Incense burner','Ark chest','Shofar','Harp','Crown','Star','Dove with olive branch','Shepherd crook']},
+    {name:'Stories',file:'biblical-stories.png',cols:4,rows:3,items:['Empty tomb','Manger','Mustard plant','Burning bush','Rainbow','Ladder','Loaves and fish','Water jar','Sling','Sling stones','Olive press','Winepress']}
   ];
-  const HAND = {src:'./assets/marker-hand-v2.png',x:66,y:27,w:630,h:420};
+  const HAND = {src:'./assets/marker-hand-v3.png',x:138,y:16,w:650,h:433};
+  const sheetCache=new Map(),cropCache=new Map();
+  const textTimers=new Map();
   const state = {project:null,sceneIndex:0,selected:null,tool:'select',playing:false,preview:false,previewCameraBox:null,editorView:{cx:800,cy:450,w:1600},time:0,frame:0,lastTick:0,saveTimer:0,undo:[],redo:[],db:null,drag:null,audio:null,exporting:false,recording:null,fonts:null,handImage:null};
 
   function demoProject(){
@@ -108,7 +121,7 @@
     return raw.map(p=>({...p,tx:it.x-vb[0]*sx,ty:it.y-vb[1]*sy,sx,sy}));
   }
   function textPaths(it){
-    const font=state.fonts?.[it.font||'futural'];if(!font)return [];
+    const font=state.fonts?.[it.font]||state.fonts?.futural;if(!font)return [];
     const glyph=c=>font.chars[(c.charCodeAt(0)>=33&&c.charCodeAt(0)<=127?c.charCodeAt(0):63)-33];
     const rows=String(it.text||'Text').split('\n').slice(0,6),advance=c=>/\s/u.test(c)?12:(glyph(c)?.o||10)*1.68;
     const scale=it.fontSize/23,maxWidth=Math.max(1,...rows.map(row=>[...row].reduce((a,c)=>a+advance(c),0))),fit=Math.min(1,it.w/(maxWidth*scale));
@@ -123,7 +136,8 @@
   }
   function imageTracePaths(it){
     const paths=(it.tracePaths||[]).map(d=>({d,sw:3.5}));
-    for(let y=3;y<=99;y+=6)paths.push({d:`M0 ${y} L100 ${y}`,sw:7.4});
+    if(it.transparentArtwork)for(const d of it.fillPaths||[])paths.push({d,sw:7.4});
+    else for(let y=3;y<=99;y+=6)paths.push({d:`M0 ${y} L100 ${y}`,sw:7.4});
     return paths;
   }
   function maskedDrawing(it,body,progress,withHand){
@@ -141,6 +155,10 @@
       const full=elementMarkup(it,1,false,false),opacity=it.animation==='fade'?progress:1;
       const transform=it.animation==='slide'?`translate(${(1-progress)*-150} 0)`:it.animation==='pop'?`translate(${it.x+it.w/2} ${it.y+it.h/2}) scale(${.5+.5*progress}) translate(${-it.x-it.w/2} ${-it.y-it.h/2})`:'';
       return `<g ${attr} opacity="${opacity}" transform="${transform}">${full}</g>`;
+    }
+    if(it.type==='text'&&HANDWRITING_FONTS[it.font]&&it.handwritingSrc&&it.handwritingSignature===textSignature(it)){
+      const body=`<image href="${esc(it.handwritingSrc)}" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" preserveAspectRatio="none"/>`;
+      return start+maskedDrawing(it,body,progress,hand&&progress<1)+hit+end;
     }
     if(it.type==='icon'||it.type==='vector'||it.type==='text'){
       const drawn=sequenceMarkup(it.type==='text'?textPaths(it):vectorPaths(it),progress,hand&&progress<1);
@@ -222,16 +240,16 @@
       if(it.type==='camera'){
         html+=`<div class="panel-divider"></div>${field('Zoom','zoom',it.zoom,'number','min="0.2" max="5" step="0.05"')}<div class="field-row">${field('Center X','cx',Math.round(it.cx),'number','step="10"')}${field('Center Y','cy',Math.round(it.cy),'number','step="10"')}</div><button class="panel-action camera-preview" data-action="preview-camera">Preview this camera frame</button><p class="panel-help camera-help">Drag the green frame to pan. Drag its handles to resize the shot. Preview is cropped to this frame.</p>`;
       }else{
-        if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}${selectField('Writing style','font',it.font||'futural',FONT_OPTIONS)}`;
+        if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}${selectField('Writing style','font',it.font||'futural',FONT_OPTIONS)}${HANDWRITING_FONTS[it.font]?`<div class="font-sample" style="font-family:'${esc(HANDWRITING_FONTS[it.font])}',sans-serif">The quick brown fox 123</div>`:''}`;
         if(it.type==='icon'||it.type==='text'||it.type==='vector')html+=field('Color','color',it.color||'#285d63','color');
         if(it.type==='shape')html+=`${selectField('Shape','shape',it.shape,[['round','Rounded rectangle'],['rect','Rectangle'],['circle','Ellipse']])}${field('Fill','fill',it.fill,'color')}`;
         html+=`<div class="field-row">${field('X position','x',Math.round(it.x),'number','step="1"')}${field('Y position','y',Math.round(it.y),'number','step="1"')}</div><div class="field-row">${field('Width','w',Math.round(it.w),'number','min="10"')}${field('Height','h',Math.round(it.h),'number','min="10"')}</div>`;
         html+=selectField('Entrance','animation',it.animation==='reveal'?'draw':it.animation,[['draw','Hand draw'],['fade','Fade in'],['slide','Slide in'],['pop','Pop in'],['none','Appear']]);
-        if(it.type==='image')html+=`<div class="note-card">The marker traces image contours, then fills the remaining detail with strokes.</div>`;
+        if(it.type==='image')html+=`<div class="note-card">The marker traces visible contours and fills only visible artwork. Transparent areas stay clear.</div>`;
       }
       html+=`<div class="panel-divider"></div><div class="field-row">${field('Duration (sec)','duration',it.duration,'number','min="0.1" max="60" step="0.1"')}${field('Pause (sec)','pause',it.pause,'number','min="0" max="60" step="0.1"')}</div><div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-action="duplicate">Duplicate</button><button class="panel-action" data-action="back">Move earlier</button><button class="panel-action" data-action="forward">Move later</button><button class="panel-action danger" data-action="delete">Delete</button></div>`;
     }else if(state.tool==='icon'){
-      html=`<div class="panel-eyebrow">LIBRARY</div><h2 class="panel-title">Drawings</h2><p class="panel-help">Choose an illustration to add it to the canvas.</p><div class="preset-grid">${iconKeys.map(k=>`<button class="preset" data-icon="${k}" title="${ICONS[k].name}">${({bulb:'♧',chart:'↗',heart:'♡',star:'☆',person:'♙',cloud:'☁',rocket:'♢',check:'✓',pencil:'✎'})[k]}</button>`).join('')}</div><div class="panel-divider"></div><div class="panel-eyebrow">ILLUSTRATION SHEETS</div>${SHEETS.map((sheet,si)=>`<h3 class="sheet-title">${sheet.name}</h3><div class="sheet-grid">${sheet.items.map((name,ii)=>`<button class="sheet-item" data-sheet="${si}" data-sheet-item="${ii}" title="Add ${esc(name)}"><span class="sheet-thumb" style="background-image:url('./assets/sheets/${sheet.file}');background-position:${ii%2?100:0}% ${ii>1?100:0}%"></span><span>${esc(name)}</span></button>`).join('')}</div>`).join('')}<div class="panel-divider"></div><div class="note-card">Transparent illustrations are added individually and drawn by the marker.</div>`;
+      html=`<div class="panel-eyebrow">LIBRARY</div><h2 class="panel-title">Drawings</h2><p class="panel-help">Choose an illustration to add it to the canvas.</p><div class="preset-grid">${iconKeys.map(k=>`<button class="preset" data-icon="${k}" title="${ICONS[k].name}">${({bulb:'♧',chart:'↗',heart:'♡',star:'☆',person:'♙',cloud:'☁',rocket:'♢',check:'✓',pencil:'✎'})[k]}</button>`).join('')}</div><div class="panel-divider"></div><div class="field"><label for="librarySearch">Find an illustration</label><input id="librarySearch" type="search" placeholder="Search all 160 drawings"></div>${SHEETS.map((sheet,si)=>`${si===0?'<div class="panel-eyebrow">BLACK LINE ART</div>':si===10?'<div class="panel-divider"></div><div class="panel-eyebrow">BIBLE ERA COLOR ART</div>':''}<section class="sheet-section"><h3 class="sheet-title">${sheet.name}</h3><div class="sheet-grid">${sheet.items.map((name,ii)=>{const cols=sheet.cols||2,rows=sheet.rows||2;return `<button class="sheet-item" data-sheet="${si}" data-sheet-item="${ii}" title="Add ${esc(name)}"><span class="sheet-thumb" style="background-image:url('./assets/sheets/${sheet.file}');background-size:${cols*100}% ${rows*100}%;background-position:${(ii%cols)/(cols-1)*100}% ${Math.floor(ii/cols)/(rows-1)*100}%"></span><span>${esc(name)}</span></button>`;}).join('')}</div></section>`).join('')}<div class="panel-divider"></div><div class="note-card">All artwork has a transparent background and is added one drawing at a time.</div>`;
     }else if(state.tool==='shape'){
       html=`<div class="panel-eyebrow">ELEMENTS</div><h2 class="panel-title">Shapes</h2><p class="panel-help">Simple shapes help frame your message.</p><div class="preset-grid"><button class="preset" data-shape="round">▢</button><button class="preset" data-shape="rect">□</button><button class="preset" data-shape="circle">○</button></div>`;
     }else if(state.tool==='audio'){
@@ -240,6 +258,7 @@
       html=`<div class="panel-eyebrow">SCENE SETTINGS</div><h2 class="panel-title">${esc(s.name)}</h2><p class="panel-help">Build your whiteboard story, one moment at a time.</p>${field('Scene name','sceneName',s.name)}${field('Background','background',s.background,'color')}<div class="panel-divider"></div><div class="field"><label>Camera and video format</label><div class="segmented">${[['16:9','Wide'],['1:1','Square'],['9:16','Tall']].map(([v,n])=>`<button data-ratio="${v}" class="${state.project.ratio===v?'active':''}">${n}</button>`).join('')}</div></div><div class="panel-divider"></div><div class="note-card">Pan across the whiteboard to build beyond the first frame. Add camera views to choose each shot.</div><div class="panel-divider"></div><button class="panel-action danger" data-action="scene-delete" ${state.project.scenes.length===1?'disabled':''}>Delete scene</button>`;
     }
     $('#inspector').innerHTML=html;
+    if(state.tool==='icon'&&!it)hydrateSheetThumbnails();
   }
   function renderAll(){renderStage();renderTimeline();renderInspector();$('#projectName').value=state.project.name;$('#formatLabel').textContent=({'16:9':'16:9 · Landscape','1:1':'1:1 · Square','9:16':'9:16 · Portrait'})[state.project.ratio];document.querySelectorAll('.tool').forEach(b=>b.classList.toggle('active',b.dataset.tool===state.tool));}
   function snapshot(){state.undo.push(clone(state.project));if(state.undo.length>40)state.undo.shift();state.redo=[];}
@@ -248,18 +267,90 @@
   function addItem(it){if(it.type!=='camera'){const max=state.editorView.w*.82;if(it.w>max){const f=max/it.w;it.w*=f;it.h*=f;if(it.fontSize)it.fontSize=Math.round(it.fontSize*f);}it.x=state.editorView.cx-it.w/2;it.y=state.editorView.cy-it.h/2;}snapshot();scene().items.push(it);state.selected=it.id;state.tool='select';changed();}
   function baseItem(type){return {id:id(),type,x:560,y:310,w:450,h:280,animation:'draw',duration:1.6,pause:.3};}
   function addIcon(k){addItem({...baseItem('icon'),icon:k,x:615,y:305,w:275,h:275,color:'#285d63',animation:'draw',duration:2});}
+  function gridCuts(counts,parts){
+    const dimension=counts.length,cuts=[0];
+    for(let k=1;k<parts;k++){
+      const expected=Math.round(dimension*k/parts),radius=Math.round(dimension/parts*.3),lo=Math.max(cuts[cuts.length-1]+12,expected-radius),hi=Math.min(dimension-12,expected+radius);
+      let best=expected,bestScore=Infinity;
+      for(let at=lo;at<=hi;at++){let score=Math.abs(at-expected)*.03;for(let j=Math.max(0,at-3);j<=Math.min(dimension-1,at+3);j++)score+=counts[j];if(score<bestScore){bestScore=score;best=at;}}
+      cuts.push(best);
+    }
+    cuts.push(dimension);return cuts;
+  }
+  async function sheetData(sheetIndex){
+    if(sheetCache.has(sheetIndex))return sheetCache.get(sheetIndex);
+    const pending=(async()=>{
+      const sheet=SHEETS[sheetIndex],image=new Image();image.src=`./assets/sheets/${sheet.file}`;await image.decode();
+      const width=image.naturalWidth,height=image.naturalHeight,canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
+      const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);const pixels=ctx.getImageData(0,0,width,height).data;
+      const columns=new Uint32Array(width),rows=new Uint32Array(height);
+      for(let y=0;y<height;y++)for(let x=0;x<width;x++)if(pixels[(y*width+x)*4+3]>80){columns[x]++;rows[y]++;}
+      const xs=gridCuts(columns,sheet.cols||2),ys=gridCuts(rows,sheet.rows||2),cells=[];
+      for(let index=0;index<sheet.items.length;index++){
+        const col=index%(sheet.cols||2),row=Math.floor(index/(sheet.cols||2)),x0=xs[col],x1=xs[col+1],y0=ys[row],y1=ys[row+1];
+        let left=x1,top=y1,right=x0,bottom=y0;
+        for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)if(pixels[(y*width+x)*4+3]>55){left=Math.min(left,x);top=Math.min(top,y);right=Math.max(right,x);bottom=Math.max(bottom,y);}
+        if(right<left){cells.push([x0,y0,x1-x0,y1-y0]);continue;}
+        const pad=Math.max(14,Math.round(Math.max(right-left,bottom-top)*.075));
+        left=Math.max(x0,left-pad);top=Math.max(y0,top-pad);right=Math.min(x1-1,right+pad);bottom=Math.min(y1-1,bottom+pad);
+        cells.push([left,top,right-left+1,bottom-top+1]);
+      }
+      return {image,cells};
+    })().catch(e=>{sheetCache.delete(sheetIndex);throw e;});
+    sheetCache.set(sheetIndex,pending);return pending;
+  }
+  async function cropSheetDrawing(sheetIndex,drawingIndex){
+    const key=`${sheetIndex}:${drawingIndex}`;if(cropCache.has(key))return cropCache.get(key);
+    const pending=(async()=>{const {image,cells}=await sheetData(sheetIndex),[x,y,w,h]=cells[drawingIndex],canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(image,x,y,w,h,0,0,w,h);return {src:canvas.toDataURL('image/png'),width:w,height:h};})().catch(e=>{cropCache.delete(key);throw e;});
+    cropCache.set(key,pending);return pending;
+  }
+  function hydrateSheetThumbnails(){
+    state.galleryObserver?.disconnect();
+    if(!window.IntersectionObserver)return;
+    state.galleryObserver=new IntersectionObserver(entries=>{for(const entry of entries){if(!entry.isIntersecting)continue;const button=entry.target;state.galleryObserver?.unobserve(button);cropSheetDrawing(+button.dataset.sheet,+button.dataset.sheetItem).then(art=>{const thumb=button.querySelector('.sheet-thumb');if(thumb){thumb.style.backgroundImage=`url("${art.src}")`;thumb.style.backgroundSize='contain';thumb.style.backgroundPosition='center';}}).catch(console.error);}}, {root:$('#inspector'),rootMargin:'160px'});
+    document.querySelectorAll('#inspector [data-sheet-item]').forEach(button=>state.galleryObserver.observe(button));
+  }
+  function filterLibrary(query){
+    const needle=query.trim().toLowerCase();
+    document.querySelectorAll('#inspector .sheet-section').forEach(section=>{
+      let visible=0;section.querySelectorAll('[data-sheet-item]').forEach(button=>{const match=!needle||button.textContent.toLowerCase().includes(needle);button.hidden=!match;if(match)visible++;});
+      section.hidden=visible===0;
+    });
+  }
   async function addSheetDrawing(sheetIndex,drawingIndex){
     const sheet=SHEETS[sheetIndex],name=sheet?.items[drawingIndex];if(!name)return;
     try{
-      const image=new Image();image.src=`./assets/sheets/${sheet.file}`;await image.decode();
-      const sw=image.naturalWidth/2,sh=image.naturalHeight/2,canvas=document.createElement('canvas');canvas.width=sw;canvas.height=sh;
-      canvas.getContext('2d').drawImage(image,(drawingIndex%2)*sw,Math.floor(drawingIndex/2)*sh,sw,sh,0,0,sw,sh);
-      const src=canvas.toDataURL('image/png'),tracePaths=await traceImage(src);
-      addItem({...baseItem('image'),label:name,src,tracePaths,w:450,h:300,duration:2.2});toast(`${name} added to the canvas.`);
+      const art=await cropSheetDrawing(sheetIndex,drawingIndex),trace=await traceImage(art.src);
+      let w=sheet.cols?330:420,h=w*art.height/art.width;if(h>470){w*=470/h;h=470;}
+      addItem({...baseItem('image'),label:name,src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,sheetRef:[sheetIndex,drawingIndex],w,h,duration:2.2});toast(`${name} added to the canvas.`);
     }catch(e){console.error(e);toast('Could not add that illustration.');}
   }
+  function textSignature(it){return JSON.stringify([it.text,it.font,it.fontSize,it.color,it.w,it.h]);}
+  async function refreshHandwriting(it){
+    if(!HANDWRITING_FONTS[it.font])return;
+    const signature=textSignature(it),family=HANDWRITING_FONTS[it.font],rows=String(it.text||'').split('\n').slice(0,8);
+    try{
+      await document.fonts.load(`48px "${family}"`);
+      if(textSignature(it)!==signature)return;
+      const ratio=Math.max(1,Math.min(3,2400/Math.max(1,it.w),2400/Math.max(1,it.h))),canvas=document.createElement('canvas');
+      canvas.width=Math.max(1,Math.ceil(it.w*ratio));canvas.height=Math.max(1,Math.ceil(it.h*ratio));
+      const ctx=canvas.getContext('2d');ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.scale(ratio,ratio);
+      const size=Math.max(12,Math.min(it.fontSize,(it.h-8)/(Math.max(1,rows.length)*1.16)));
+      ctx.font=`${size}px "${family}"`;ctx.textBaseline='top';ctx.fillStyle=it.color||'#213b4b';
+      const longest=Math.max(1,...rows.map(row=>ctx.measureText(row).width)),fit=Math.min(1,(it.w-8)/longest);
+      ctx.scale(fit,1);rows.forEach((row,index)=>ctx.fillText(row,4/fit,2+index*size*1.16));
+      const src=canvas.toDataURL('image/png'),trace=await traceImage(src);
+      if(textSignature(it)!==signature||!state.project.scenes.some(s=>s.items.includes(it)))return;
+      it.handwritingSrc=src;it.handwritingSignature=signature;it.tracePaths=trace.paths;it.fillPaths=trace.fillPaths;it.transparentArtwork=true;changed(false);
+    }catch(e){console.error(e);toast('Could not load that writing style.');}
+  }
+  function scheduleHandwriting(it){
+    clearTimeout(textTimers.get(it.id));
+    if(!HANDWRITING_FONTS[it.font])return;
+    textTimers.set(it.id,setTimeout(()=>{textTimers.delete(it.id);refreshHandwriting(it);},100));
+  }
   function addShape(shape){addItem({...baseItem('shape'),shape,fill:'#cde9df',w:350,h:225});}
-  function addText(){addItem({...baseItem('text'),text:'Your message here',x:470,y:350,w:850,h:130,fontSize:72,color:'#213b4b',font:'futural'});}
+  function addText(){const it={...baseItem('text'),text:'Your message here',x:470,y:350,w:850,h:130,fontSize:72,color:'#213b4b',font:'patrick'};addItem(it);scheduleHandwriting(it);}
   function addCamera(){addItem({id:id(),type:'camera',cx:state.editorView.cx,cy:state.editorView.cy,zoom:clamp(baseBox()[2]/(state.editorView.w*.72),.2,5),duration:1,pause:.2});}
   function selectItem(itemId){state.selected=itemId;state.tool='select';renderAll();}
   function pause(){state.playing=false;cancelAnimationFrame(state.frame);state.audio?.pause();renderTimeline();}
@@ -286,11 +377,16 @@
     for(const s of p.scenes)for(const it of s.items){
       if(it.animation==='reveal')it.animation='draw';
       if(it.type==='text'&&!it.font)it.font='futural';
-      if(it.type==='image'&&!Array.isArray(it.tracePaths)&&it.src){try{it.tracePaths=await traceImage(it.src);}catch{it.tracePaths=[];}}
+      if(it.type==='image'&&it.src&&(!Array.isArray(it.tracePaths)||!Array.isArray(it.fillPaths)||it.transparentArtwork==null)){
+        try{const trace=await traceImage(it.src);it.tracePaths=trace.paths;it.fillPaths=trace.fillPaths;it.transparentArtwork=trace.transparent;}
+        catch{it.tracePaths=it.tracePaths||[];it.fillPaths=[];it.transparentArtwork=false;}
+      }
     }
     return p;
   }
-  async function loadProject(projectId){pause();let p=await dbTask('readonly',s=>s.get(projectId));if(!p)return;state.project=await migrateProject(p);state.editorView=projectView(state.project);state.sceneIndex=0;state.selected=null;state.time=0;state.preview=false;state.previewCameraBox=null;state.audio=null;state.undo=[];state.redo=[];localStorage.setItem('whiteboard-current',p.id);closeModal();renderAll();await saveProject();}
+  function prepareHandwriting(){for(const s of state.project.scenes)for(const it of s.items)if(it.type==='text'&&HANDWRITING_FONTS[it.font]&&it.handwritingSignature!==textSignature(it))scheduleHandwriting(it);}
+  async function ensureHandwriting(){const pending=[];for(const s of state.project.scenes)for(const it of s.items)if(it.type==='text'&&HANDWRITING_FONTS[it.font]&&it.handwritingSignature!==textSignature(it)){clearTimeout(textTimers.get(it.id));pending.push(refreshHandwriting(it));}await Promise.all(pending);}
+  async function loadProject(projectId){pause();let p=await dbTask('readonly',s=>s.get(projectId));if(!p)return;state.project=await migrateProject(p);state.editorView=projectView(state.project);state.sceneIndex=0;state.selected=null;state.time=0;state.preview=false;state.previewCameraBox=null;state.audio=null;state.undo=[];state.redo=[];localStorage.setItem('whiteboard-current',p.id);closeModal();renderAll();prepareHandwriting();await saveProject();}
   async function listProjects(){return (await dbTask('readonly',s=>s.getAll())).sort((a,b)=>b.updated-a.updated);}
   function modal(html){$('#modal').innerHTML=`<div class="modal-card">${html}</div>`;$('#modal').classList.remove('hidden');}
   function closeModal(){$('#modal').classList.add('hidden');$('#modal').innerHTML='';}
@@ -311,7 +407,7 @@
     if(state.exporting)return;
     if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream){toast('Video export is unavailable in this browser.');return;}
     if(totalLen()<.2){toast('Add something to the timeline before exporting.');return;}
-    pause();state.exporting=true;
+    pause();state.exporting=true;await ensureHandwriting();
     const choices=['video/mp4;codecs=avc1.42E01E','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
     const mime=choices.find(x=>MediaRecorder.isTypeSupported(x));if(!mime){toast('No supported video format found in this browser.');state.exporting=false;return;}
     modal(`<div class="modal-top"><h2>Exporting your video</h2></div><p class="panel-help">Keep this tab open while the video is recorded. Your browser chooses ${mime.includes('mp4')?'MP4':'WebM'} for this export.</p><div class="export-progress"><div id="progressBar"></div></div><p id="exportStatus" class="panel-help">Preparing frames…</p>`);
@@ -367,7 +463,16 @@
       const reduced=pts.filter((p,i)=>i===0||i===pts.length-1||i%2===0);
       traces.push({distance,d:'M'+reduced.map(p=>`${(p[0]*100/(size-1)).toFixed(1)} ${(p[1]*100/(size-1)).toFixed(1)}`).join(' L')});
     });
-    return traces.sort((a,b)=>b.distance-a.distance).slice(0,50).map(x=>x.d);
+    const fillPaths=[];
+    if(hasAlpha)for(let y=3;y<size-2;y+=5){
+      let start=-1;
+      for(let x=0;x<=size;x++){
+        const opaque=x<size&&alpha[y*size+x]>=60;
+        if(opaque&&start<0)start=x;
+        if(!opaque&&start>=0){if(x-start>=2)fillPaths.push(`M${(start*100/(size-1)).toFixed(1)} ${(y*100/(size-1)).toFixed(1)} L${((x-1)*100/(size-1)).toFixed(1)} ${(y*100/(size-1)).toFixed(1)}`);start=-1;}
+      }
+    }
+    return {paths:traces.sort((a,b)=>b.distance-a.distance).slice(0,80).map(x=>x.d),fillPaths,transparent:hasAlpha};
   }
   async function uploadImage(file){
     if(!file)return;if(file.size>12*1024*1024){toast('Choose an image under 12 MB.');return;}
@@ -385,14 +490,14 @@
             if(['script','style','foreignobject','iframe','object','embed','image','animate','set'].includes(el.localName.toLowerCase())){el.remove();continue;}
             for(const attr of [...el.attributes]){const name=attr.name.toLowerCase(),value=attr.value;if(name.startsWith('on')||((name==='href'||name.endsWith(':href'))&&!value.startsWith('#'))||/url\(\s*['"]?(?!#)/i.test(value)||(name==='style'&&/@import|expression/i.test(value)))el.removeAttribute(attr.name);}
           }
-          const safe=await readFile(new Blob([new XMLSerializer().serializeToString(root)],{type:'image/svg+xml'})),tracePaths=await traceImage(safe);
-          addItem({...baseItem('image'),src:safe,tracePaths,x:620,y:250,w:420,h:400});toast('SVG artwork added with marker tracing.');return;
+          const safe=await readFile(new Blob([new XMLSerializer().serializeToString(root)],{type:'image/svg+xml'})),trace=await traceImage(safe);
+          addItem({...baseItem('image'),src:safe,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,x:620,y:250,w:420,h:400});toast('SVG artwork added with marker tracing.');return;
         }
         toast('That SVG could not be read.');return;
       }
       const src=await readFile(file);if(!/^data:image\/(png|jpeg|svg\+xml);base64,/.test(src)){toast('Use a PNG, JPEG, or SVG image.');return;}
-      const tracePaths=await traceImage(src);
-      addItem({...baseItem('image'),src,tracePaths,x:620,y:250,w:420,h:400});toast('Image added with marker tracing.');
+      const trace=await traceImage(src);
+      addItem({...baseItem('image'),src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,x:620,y:250,w:420,h:400});toast('Image added with marker tracing.');
     }catch(e){toast('Could not read that image.');}
   }
   async function uploadAudio(file){if(!file)return;if(file.size>25*1024*1024){toast('Choose an audio file under 25 MB.');return;}try{const src=await readFile(file);snapshot();state.project.audio={name:file.name,src};state.audio=null;changed();toast('Audio added.');}catch{toast('Could not read that audio file.');}}
@@ -412,6 +517,7 @@
     else if(['x','y','w','h','fontSize','duration','pause','zoom','cx','cy'].includes(key)){
       const n=num(value,target[key]);target[key]=key==='duration'?clamp(n,.1,60):key==='pause'?clamp(n,0,60):key==='zoom'?clamp(n,.2,5):key==='w'||key==='h'?clamp(n,10,30000):key==='fontSize'?clamp(n,16,180):n;
     }else target[key]=value;
+    if(it?.type==='text'&&['text','font','fontSize','color','w','h'].includes(key))scheduleHandwriting(it);
     changed(false);
   }
   function action(name){
@@ -448,7 +554,7 @@
     document.querySelectorAll('.tool').forEach(b=>b.addEventListener('click',()=>{stopPreview();state.tool=b.dataset.tool;state.selected=null;if(state.tool==='text')addText();else if(state.tool==='upload')$('#uploadInput').click();else if(state.tool==='camera')addCamera();else{renderAll();}}));
     $('#inspector').addEventListener('click',e=>{const icon=e.target.closest('[data-icon]'),sheet=e.target.closest('[data-sheet-item]'),shape=e.target.closest('[data-shape]'),ratio=e.target.closest('[data-ratio]'),act=e.target.closest('[data-action]');if(icon)addIcon(icon.dataset.icon);if(sheet)addSheetDrawing(+sheet.dataset.sheet,+sheet.dataset.sheetItem);if(shape)addShape(shape.dataset.shape);if(ratio){snapshot();state.project.ratio=ratio.dataset.ratio;changed();}if(act)action(act.dataset.action);});
     $('#inspector').addEventListener('focusin',e=>{if(e.target.matches('[data-set]'))snapshot();});
-    $('#inspector').addEventListener('input',e=>{if(e.target.matches('[data-set]'))applyField(e.target.dataset.set,e.target.value);});
+    $('#inspector').addEventListener('input',e=>{if(e.target.id==='librarySearch')filterLibrary(e.target.value);else if(e.target.matches('[data-set]'))applyField(e.target.dataset.set,e.target.value);});
     $('#inspector').addEventListener('change',e=>{if(e.target.matches('[data-set]')){applyField(e.target.dataset.set,e.target.value);renderInspector();}});
     $('#stage').addEventListener('pointerdown',e=>{
       if(state.preview||e.button>1)return;
@@ -467,7 +573,7 @@
       else{it.x=Math.round(drag.original.x+dx);it.y=Math.round(drag.original.y+dy);}
       renderStage();
     });
-    const endDrag=()=>{if(!state.drag)return;const wasPan=state.drag.mode==='pan';state.drag=null;if(wasPan){saveEditorView();renderStage();}else{changed(false);renderInspector();}};$('#stage').addEventListener('pointerup',endDrag);$('#stage').addEventListener('pointercancel',endDrag);
+    const endDrag=()=>{if(!state.drag)return;const wasPan=state.drag.mode==='pan',dragged=scene().items.find(x=>x.id===state.drag.id),resized=state.drag.mode==='resize';state.drag=null;if(wasPan){saveEditorView();renderStage();}else{if(resized&&dragged?.type==='text')scheduleHandwriting(dragged);changed(false);renderInspector();}};$('#stage').addEventListener('pointerup',endDrag);$('#stage').addEventListener('pointercancel',endDrag);
     $('#sceneStrip').addEventListener('click',e=>{const b=e.target.closest('[data-scene]');if(!b)return;stopPreview();state.sceneIndex=+b.dataset.scene;state.selected=null;state.time=sceneStart(state.sceneIndex);renderAll();});
     $('#itemStrip').addEventListener('click',e=>{const b=e.target.closest('[data-item]');if(b){stopPreview();selectItem(b.dataset.item);}});
     let dragged=null;$('#itemStrip').addEventListener('dragstart',e=>{const b=e.target.closest('[data-item]');if(b){dragged=b.dataset.item;e.dataTransfer.effectAllowed='move';}});$('#itemStrip').addEventListener('dragover',e=>{if(e.target.closest('[data-item]'))e.preventDefault();});$('#itemStrip').addEventListener('drop',e=>{const b=e.target.closest('[data-item]');if(!b||!dragged||dragged===b.dataset.item)return;e.preventDefault();const items=scene().items,from=items.findIndex(x=>x.id===dragged),to=items.findIndex(x=>x.id===b.dataset.item);if(from<0||to<0)return;snapshot();items.splice(to,0,items.splice(from,1)[0]);dragged=null;changed();});
@@ -485,7 +591,7 @@
     const fontResponse=await fetch('./assets/stroke-font.json');if(!fontResponse.ok)throw new Error('Writing font did not load');state.fonts=await fontResponse.json();
     const hand=new Image();hand.src=HAND.src;await hand.decode();state.handImage=hand;
     state.db=await openDb();const current=localStorage.getItem('whiteboard-current');let p=current?await dbTask('readonly',s=>s.get(current)):null;if(!p){const all=await listProjects();p=all[0]||demoProject();}
-    state.project=await migrateProject(p);state.editorView=projectView(state.project);bind();new ResizeObserver(renderStage).observe($('#canvasShell'));renderAll();await saveProject();
+    state.project=await migrateProject(p);state.editorView=projectView(state.project);bind();new ResizeObserver(renderStage).observe($('#canvasShell'));renderAll();prepareHandwriting();await saveProject();
   }catch(e){console.error(e);$('#inspector').innerHTML=`<h2 class="panel-title">Could not open the editor</h2><p class="panel-help">${esc(e.message)}. Reload the app to try again.</p>`;}}
   init();
 })();
