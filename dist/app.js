@@ -2,6 +2,7 @@
   'use strict';
   const $ = (s) => document.querySelector(s);
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const safePaint = (v,fallback) => /^(none|transparent|#[0-9a-f]{3,8}|[a-z]+|rgba?\([\d\s.,%]+\))$/i.test(String(v||''))?v:fallback;
   const id = () => crypto.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const clamp = (n,a,b) => Math.max(a,Math.min(b,n));
   const num = (v,f=0) => Number.isFinite(+v) ? +v : f;
@@ -19,15 +20,15 @@
     pencil:{name:'Pencil',paths:['M19 75 72 22l8 8-53 53-15 4z','M64 30l8 8','M16 88h70']}
   };
   const iconKeys = Object.keys(ICONS);
-  const state = {project:null,sceneIndex:0,selected:null,tool:'select',playing:false,preview:false,time:0,frame:0,lastTick:0,saveTimer:0,undo:[],redo:[],db:null,drag:null,audio:null,exporting:false,recording:null};
+  const state = {project:null,sceneIndex:0,selected:null,tool:'select',playing:false,preview:false,time:0,frame:0,lastTick:0,saveTimer:0,undo:[],redo:[],db:null,drag:null,audio:null,exporting:false,recording:null,fonts:null,handImage:null};
 
   function demoProject(){
     return {id:id(),name:'Your first story',ratio:'16:9',updated:Date.now(),audio:null,scenes:[
       {id:id(),name:'The big idea',background:'#ffffff',items:[
         {id:id(),type:'icon',icon:'bulb',x:138,y:180,w:245,h:245,color:'#285d63',animation:'draw',duration:2.2,pause:.25},
-        {id:id(),type:'text',text:'Make ideas\ncome alive.',x:468,y:250,w:800,h:220,fontSize:93,color:'#1e3445',animation:'reveal',duration:2,pause:.5},
+        {id:id(),type:'text',text:'Make ideas\ncome alive.',x:468,y:250,w:800,h:220,fontSize:93,color:'#1e3445',animation:'draw',duration:2,pause:.5},
         {id:id(),type:'camera',cx:1000,cy:450,zoom:1.18,duration:1,pause:.15},
-        {id:id(),type:'text',text:'One line at a time.',x:550,y:575,w:750,h:100,fontSize:51,color:'#f27a59',animation:'reveal',duration:1.6,pause:1}
+        {id:id(),type:'text',text:'One line at a time.',x:550,y:575,w:750,h:100,fontSize:51,color:'#f27a59',animation:'draw',duration:1.6,pause:1}
       ]}
     ]};
   }
@@ -67,52 +68,80 @@
     const p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',d);$('#stage').appendChild(p);
     let n=100;try{n=p.getTotalLength()}catch{}p.remove();lengthCache.set(d,n);return n;
   }
-  function vectorPaths(it){return it.icon ? ICONS[it.icon]?.paths.map(d=>({d,stroke:it.color,fill:'none',sw:3.7})) || [] : it.paths || [];}
-  function vectorMarkup(it,progress,withHand){
-    const paths=vectorPaths(it), lens=paths.map(p=>pathLength(p.d)), total=lens.reduce((a,b)=>a+b,0)||1;
-    let elapsed=progress*total,hand=null,markup='';
-    paths.forEach((p,i)=>{
-      const l=lens[i],done=clamp(elapsed/l,0,1);elapsed-=l;
-      const d=esc(p.d),stroke=esc(p.stroke||it.color||'#285d63'),sw=num(p.sw,3.7);
-      markup+=`<path d="${d}" fill="${done>=.99?esc(p.fill||'none'):'none'}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="${l}" stroke-dashoffset="${l*(1-done)}"/>`;
-      if(done>0 && done<1){const node=document.createElementNS('http://www.w3.org/2000/svg','path');node.setAttribute('d',p.d);$('#stage').appendChild(node);try{hand=node.getPointAtLength(l*done)}catch{}node.remove();}
-    });
-    const vb=it.vb||[0,0,100,100],sx=it.w/vb[2],sy=it.h/vb[3];
-    let out=`<g transform="translate(${it.x} ${it.y}) scale(${sx} ${sy}) translate(${-vb[0]} ${-vb[1]})">${markup}</g>`;
-    if(withHand&&hand){const hx=it.x+(hand.x-vb[0])*sx,hy=it.y+(hand.y-vb[1])*sy;out+=handMarkup(hx,hy);}
-    return out;
+  let exportRender=false,exportHand=null;
+  function handMarkup(x,y){
+    if(exportRender){exportHand={x,y};return '';}
+    return `<image href="./assets/marker-hand.png" x="${x-120}" y="${y-32}" width="430" height="287" pointer-events="none"/>`;
   }
-  function handMarkup(x,y){return `<g transform="translate(${x+4} ${y+8}) rotate(-35)" pointer-events="none"><path d="M0 0 13 36 24 0z" fill="#db9a70" stroke="#9d6d57" stroke-width="1.5"/><path d="M6 0 12-22 18 0z" fill="#ecbd8e" stroke="#9d6d57" stroke-width="1.5"/><path d="M12-22 10-15h4z" fill="#30313b"/><path d="M15 25c10-8 23-5 25 5 2 13-7 25-19 26H0c-13-2-16-14-8-22z" fill="#e8af85" stroke="#a8705a" stroke-width="2"/></g>`;}
-  function lines(it){return String(it.text||'Text').split('\n').slice(0,6);}
+  function sequenceMarkup(paths,progress,withHand){
+    const strokes=paths.flatMap(p=>(p.d.match(/M[^M]*/g)||[p.d]).filter(Boolean).map(d=>({...p,d})));
+    const lens=strokes.map(p=>Math.max(.01,pathLength(p.d))),total=lens.reduce((a,b)=>a+b,0)||1;
+    let remaining=progress*total,hand=null,markup='';
+    for(let i=0;i<strokes.length;i++){
+      const p=strokes[i],len=lens[i],done=clamp(remaining/len,0,1);remaining-=len;
+      if(done<=0)continue;
+      const sx=p.sx??1,sy=p.sy??1,tx=p.tx??0,ty=p.ty??0;
+      markup+=`<g transform="translate(${tx} ${ty}) scale(${sx} ${sy})"><path d="${esc(p.d)}" fill="${done>=.999?esc(p.fill||'none'):'none'}" stroke="${esc(p.stroke||'#285d63')}" stroke-width="${num(p.sw,3.7)}" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="${len}" stroke-dashoffset="${len*(1-done)}"/></g>`;
+      if(withHand&&done>0&&done<1){const node=document.createElementNS('http://www.w3.org/2000/svg','path');node.setAttribute('d',p.d);$('#stage').appendChild(node);try{const pt=node.getPointAtLength(len*done);hand={x:tx+pt.x*sx,y:ty+pt.y*sy};}catch{}node.remove();}
+    }
+    return {markup,hand:hand?handMarkup(hand.x,hand.y):''};
+  }
+  function vectorPaths(it){
+    const raw=it.icon?ICONS[it.icon]?.paths.map(d=>({d,stroke:it.color,fill:'none',sw:3.7}))||[]:it.paths||[];
+    const vb=it.vb||[0,0,100,100],sx=it.w/vb[2],sy=it.h/vb[3];
+    return raw.map(p=>({...p,tx:it.x-vb[0]*sx,ty:it.y-vb[1]*sy,sx,sy}));
+  }
+  function textPaths(it){
+    const font=state.fonts?.[it.font||'futural'];if(!font)return [];
+    const rows=String(it.text||'Text').split('\n').slice(0,6),advance=c=>{if(c===' ')return 10;const g=font.chars[c.charCodeAt(0)-33];return (g?.o||10)*1.68;};
+    const scale=it.fontSize/23,maxWidth=Math.max(1,...rows.map(row=>[...row].reduce((a,c)=>a+advance(c),0))),fit=Math.min(1,it.w/(maxWidth*scale));
+    const paths=[];rows.forEach((row,j)=>{let left=0;for(const raw of row){const code=raw.charCodeAt(0),g=font.chars[(code>=33&&code<=127?code:63)-33];if(g?.d)paths.push({d:g.d,tx:it.x+left*scale*fit,ty:it.y+j*it.fontSize*1.18,sx:scale*fit,sy:scale,stroke:it.color,sw:1.35});left+=advance(raw);}});
+    return paths;
+  }
+  function shapeTracePaths(it){
+    const outline=it.shape==='circle'?'M50 1 A49 49 0 1 1 49.9 1 Z':it.shape==='round'?'M15 1 H85 Q99 1 99 15 V85 Q99 99 85 99 H15 Q1 99 1 85 V15 Q1 1 15 1 Z':'M1 1 H99 V99 H1 Z';
+    const paths=[{d:outline,sw:3.2}];
+    for(let y=4;y<=98;y+=6){let x1=1,x2=99;if(it.shape==='circle'){const r=Math.sqrt(Math.max(0,49*49-(y-50)*(y-50)));x1=50-r;x2=50+r;}else if(it.shape==='round'&&(y<15||y>85)){const dy=y<15?15-y:y-85,dx=Math.sqrt(Math.max(0,14*14-dy*dy));x1=15-dx;x2=85+dx;}paths.push({d:`M${x1.toFixed(2)} ${y} L${x2.toFixed(2)} ${y}`,sw:7.2});}
+    return paths;
+  }
+  function imageTracePaths(it){
+    const paths=(it.tracePaths||[]).map(d=>({d,sw:3.5}));
+    for(let y=3;y<=99;y+=6)paths.push({d:`M0 ${y} L100 ${y}`,sw:7.4});
+    return paths;
+  }
+  function maskedDrawing(it,body,progress,withHand){
+    if(progress>=1)return body;
+    const raw=it.type==='shape'?shapeTracePaths(it):imageTracePaths(it),sx=it.w/100,sy=it.h/100;
+    const paths=raw.map(p=>({...p,tx:it.x,ty:it.y,sx,sy,stroke:'#fff'}));
+    const drawn=sequenceMarkup(paths,progress,withHand),maskId=`mask-${it.id.replace(/[^a-zA-Z0-9]/g,'')}`;
+    return `<defs><mask id="${maskId}" maskUnits="userSpaceOnUse" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}"><rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" fill="black"/>${drawn.markup}</mask></defs><g mask="url(#${maskId})">${body}</g>${drawn.hand}`;
+  }
   function elementMarkup(it,progress=1,selectable=false,hand=false){
     const attr=selectable?`data-item="${esc(it.id)}" style="cursor:move"`:'';
     const start=`<g ${attr}>`,end='</g>';
-    if(it.type==='icon'||it.type==='vector')return start+vectorMarkup(it,progress,hand&&it.animation==='draw'&&progress<1)+end;
+    if(it.animation==='none')progress=1;
+    if(progress<1&&['fade','slide','pop'].includes(it.animation)){
+      const full=elementMarkup(it,1,false,false),opacity=it.animation==='fade'?progress:1;
+      const transform=it.animation==='slide'?`translate(${(1-progress)*-150} 0)`:it.animation==='pop'?`translate(${it.x+it.w/2} ${it.y+it.h/2}) scale(${.5+.5*progress}) translate(${-it.x-it.w/2} ${-it.y-it.h/2})`:'';
+      return `<g ${attr} opacity="${opacity}" transform="${transform}">${full}</g>`;
+    }
+    if(it.type==='icon'||it.type==='vector'||it.type==='text'){
+      const drawn=sequenceMarkup(it.type==='text'?textPaths(it):vectorPaths(it),progress,hand&&progress<1);
+      return start+drawn.markup+drawn.hand+end;
+    }
     let body='';
-    if(it.type==='text'){
-      const all=lines(it),step=it.fontSize*1.16;
-      body=all.map((line,j)=>`<text x="${it.x}" y="${it.y+it.fontSize+(j*step)}" fill="${esc(it.color)}" font-size="${it.fontSize}" font-family="Manrope,Arial,sans-serif" font-weight="800">${esc(line)}</text>`).join('');
-    }else if(it.type==='shape'){
+    if(it.type==='shape'){
       body=it.shape==='circle'?`<ellipse cx="${it.x+it.w/2}" cy="${it.y+it.h/2}" rx="${it.w/2}" ry="${it.h/2}" fill="${esc(it.fill)}"/>`:`<rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" rx="${it.shape==='round'?30:0}" fill="${esc(it.fill)}"/>`;
     }else if(it.type==='image'){
-      body=`<image href="${esc(it.src)}" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" preserveAspectRatio="xMidYMid meet"/>`;
+      body=`<image href="${esc(it.src)}" x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" preserveAspectRatio="none"/>`;
     }
-    if(progress>=1)return start+body+end;
-    if(it.animation==='fade')return `<g opacity="${progress}" ${attr}>${body}</g>`;
-    if(it.animation==='slide')return `<g transform="translate(${(1-progress)*-150} 0)" opacity="${progress}" ${attr}>${body}</g>`;
-    if(it.animation==='pop')return `<g transform="translate(${it.x+it.w/2} ${it.y+it.h/2}) scale(${.5+.5*progress}) translate(${-it.x-it.w/2} ${-it.y-it.h/2})" opacity="${progress}" ${attr}>${body}</g>`;
-    const clipId=`clip-${it.id.replace(/[^a-zA-Z0-9]/g,'')}`;
-    const clip=`<clipPath id="${clipId}"><rect x="${it.x-2}" y="${it.y-2}" width="${Math.max(1,it.w*progress+4)}" height="${it.h+5}"/></clipPath>`;
-    const pen=hand&&progress>0&&progress<1?handMarkup(it.x+it.w*progress,it.y+it.h*.7):'';
-    return `<defs>${clip}</defs><g clip-path="url(#${clipId})" ${attr}>${body}</g>${pen}`;
+    return start+maskedDrawing(it,body,progress,hand&&progress<1)+end;
   }
   function renderMarkup(s,vis,editing=false){
     let markup=`<rect width="1600" height="900" fill="${esc(s.background||'#ffffff')}"/>`;
     for(const v of vis.visible){
       const it=v.it;
-      let p=it.animation==='draw'&&['icon','vector'].includes(it.type)?v.progress:v.progress;
-      if(it.animation==='none')p=1;
-      markup+=elementMarkup(it,p,editing,v.active&&!editing);
+      markup+=elementMarkup(it,v.progress,editing,v.active&&!editing);
     }
     if(editing){
       const selected=item();
@@ -161,12 +190,12 @@
       if(it.type==='camera'){
         html+=`<div class="panel-divider"></div>${field('Zoom','zoom',it.zoom,'number','min="1" max="3" step="0.05"')}<div class="field-row">${field('Center X','cx',Math.round(it.cx),'number','min="0" max="1600" step="10"')}${field('Center Y','cy',Math.round(it.cy),'number','min="0" max="900" step="10"')}</div>`;
       }else{
-        if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}`;
+        if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}${selectField('Writing style','font',it.font||'futural',[['futural','Clean marker'],['scripts','Script marker']])}`;
         if(it.type==='icon'||it.type==='text'||it.type==='vector')html+=field('Color','color',it.color||'#285d63','color');
         if(it.type==='shape')html+=`${selectField('Shape','shape',it.shape,[['round','Rounded rectangle'],['rect','Rectangle'],['circle','Ellipse']])}${field('Fill','fill',it.fill,'color')}`;
         html+=`<div class="field-row">${field('X position','x',Math.round(it.x),'number','step="1"')}${field('Y position','y',Math.round(it.y),'number','step="1"')}</div><div class="field-row">${field('Width','w',Math.round(it.w),'number','min="10"')}${field('Height','h',Math.round(it.h),'number','min="10"')}</div>`;
-        html+=selectField('Entrance','animation',it.animation,[['draw','Hand draw'],['reveal','Reveal'],['fade','Fade in'],['slide','Slide in'],['pop','Pop in'],['none','Appear']]);
-        if(!['icon','vector'].includes(it.type))html+=`<div class="note-card">Hand draw traces line artwork. Text, shapes and photos use a progressive reveal.</div>`;
+        html+=selectField('Entrance','animation',it.animation==='reveal'?'draw':it.animation,[['draw','Hand draw'],['fade','Fade in'],['slide','Slide in'],['pop','Pop in'],['none','Appear']]);
+        if(it.type==='image')html+=`<div class="note-card">The marker traces image contours, then fills the remaining detail with strokes.</div>`;
       }
       html+=`<div class="panel-divider"></div><div class="field-row">${field('Duration (sec)','duration',it.duration,'number','min="0.1" max="60" step="0.1"')}${field('Pause (sec)','pause',it.pause,'number','min="0" max="60" step="0.1"')}</div><div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-action="duplicate">Duplicate</button><button class="panel-action" data-action="back">Move earlier</button><button class="panel-action" data-action="forward">Move later</button><button class="panel-action danger" data-action="delete">Delete</button></div>`;
     }else if(state.tool==='icon'){
@@ -185,10 +214,10 @@
   function changed(full=true){state.project.updated=Date.now();$('#saveStatus').textContent='Saving…';clearTimeout(state.saveTimer);state.saveTimer=setTimeout(saveProject,450);if(full)renderAll();else{renderStage();renderTimeline();}}
   function toast(message){const t=$('#toast');t.textContent=message;t.classList.remove('hidden');clearTimeout(toast.timer);toast.timer=setTimeout(()=>t.classList.add('hidden'),3000);}
   function addItem(it){if(it.type!=='camera'){const b=baseBox(),max=b[2]*.82;if(it.w>max){const f=max/it.w;it.w*=f;it.h*=f;if(it.fontSize)it.fontSize=Math.round(it.fontSize*f);}it.x=b[0]+(b[2]-it.w)/2;it.y=b[1]+(b[3]-it.h)/2;}snapshot();scene().items.push(it);state.selected=it.id;state.tool='select';changed();}
-  function baseItem(type){return {id:id(),type,x:560,y:310,w:450,h:280,animation:'reveal',duration:1.6,pause:.3};}
+  function baseItem(type){return {id:id(),type,x:560,y:310,w:450,h:280,animation:'draw',duration:1.6,pause:.3};}
   function addIcon(k){addItem({...baseItem('icon'),icon:k,x:615,y:305,w:275,h:275,color:'#285d63',animation:'draw',duration:2});}
   function addShape(shape){addItem({...baseItem('shape'),shape,fill:'#cde9df',w:350,h:225});}
-  function addText(){addItem({...baseItem('text'),text:'Your message here',x:470,y:350,w:850,h:130,fontSize:72,color:'#213b4b',animation:'reveal'});}
+  function addText(){addItem({...baseItem('text'),text:'Your message here',x:470,y:350,w:850,h:130,fontSize:72,color:'#213b4b',font:'futural'});}
   function addCamera(){addItem({id:id(),type:'camera',cx:800,cy:450,zoom:1.35,duration:1,pause:.2});}
   function selectItem(itemId){state.selected=itemId;state.tool='select';renderAll();}
   function pause(){state.playing=false;cancelAnimationFrame(state.frame);state.audio?.pause();renderTimeline();}
@@ -205,7 +234,15 @@
   function openDb(){return new Promise((resolve,reject)=>{const req=indexedDB.open('whiteboard-studio',1);req.onupgradeneeded=()=>req.result.createObjectStore('projects',{keyPath:'id'});req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
   function dbTask(mode,fn){return new Promise((resolve,reject)=>{const tx=state.db.transaction('projects',mode),store=tx.objectStore('projects');let req=fn(store);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
   async function saveProject(){try{await dbTask('readwrite',s=>s.put(clone(state.project)));localStorage.setItem('whiteboard-current',state.project.id);$('#saveStatus').textContent='Saved locally';}catch(e){$('#saveStatus').textContent='Could not save';toast('This project could not be saved. Check your browser storage.');}}
-  async function loadProject(projectId){pause();let p=await dbTask('readonly',s=>s.get(projectId));if(!p)return;state.project=p;state.sceneIndex=0;state.selected=null;state.time=0;state.preview=false;state.audio=null;state.undo=[];state.redo=[];localStorage.setItem('whiteboard-current',p.id);closeModal();renderAll();}
+  async function migrateProject(p){
+    for(const s of p.scenes)for(const it of s.items){
+      if(it.animation==='reveal')it.animation='draw';
+      if(it.type==='text'&&!it.font)it.font='futural';
+      if(it.type==='image'&&!Array.isArray(it.tracePaths)&&it.src){try{it.tracePaths=await traceImage(it.src);}catch{it.tracePaths=[];}}
+    }
+    return p;
+  }
+  async function loadProject(projectId){pause();let p=await dbTask('readonly',s=>s.get(projectId));if(!p)return;state.project=await migrateProject(p);state.sceneIndex=0;state.selected=null;state.time=0;state.preview=false;state.audio=null;state.undo=[];state.redo=[];localStorage.setItem('whiteboard-current',p.id);closeModal();renderAll();await saveProject();}
   async function listProjects(){return (await dbTask('readonly',s=>s.getAll())).sort((a,b)=>b.updated-a.updated);}
   function modal(html){$('#modal').innerHTML=`<div class="modal-card">${html}</div>`;$('#modal').classList.remove('hidden');}
   function closeModal(){$('#modal').classList.add('hidden');$('#modal').innerHTML='';}
@@ -214,8 +251,14 @@
   async function createProject(){const name=$('#newName').value.trim()||'Untitled video',ratio=$('#newRatio').value;const p={id:id(),name,ratio,updated:Date.now(),audio:null,scenes:[{id:id(),name:'Scene 1',background:'#ffffff',items:[]}]};state.project=p;state.sceneIndex=0;state.selected=null;state.time=0;state.preview=false;state.undo=[];state.redo=[];await saveProject();closeModal();renderAll();}
   function download(blob,name){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
   function safeFilename(s){return s.replace(/[^a-z0-9-_]+/gi,'-').replace(/^-|-$/g,'').slice(0,60)||'whiteboard-video';}
-  function svgForTime(t,w,h){const loc=positionAt(t),v=visualAt(loc.scene,loc.local),box=cameraBox(v.camera);return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}" viewBox="${box.join(' ')}">${renderMarkup(loc.scene,v,false)}</svg>`;}
-  function paintSvg(ctx,t){return new Promise((resolve,reject)=>{const src=svgForTime(t,ctx.canvas.width,ctx.canvas.height),url=URL.createObjectURL(new Blob([src],{type:'image/svg+xml'})),img=new Image();img.onload=()=>{ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.drawImage(img,0,0,ctx.canvas.width,ctx.canvas.height);URL.revokeObjectURL(url);resolve();};img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Frame could not be drawn'));};img.src=url;});}
+  function svgForTime(t,w,h){
+    const loc=positionAt(t),v=visualAt(loc.scene,loc.local),box=cameraBox(v.camera);
+    exportRender=true;exportHand=null;
+    const markup=renderMarkup(loc.scene,v,false),hand=exportHand;
+    exportRender=false;
+    return {svg:`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}" viewBox="${box.join(' ')}">${markup}</svg>`,box,hand};
+  }
+  function paintSvg(ctx,t){return new Promise((resolve,reject)=>{const frame=svgForTime(t,ctx.canvas.width,ctx.canvas.height),url=URL.createObjectURL(new Blob([frame.svg],{type:'image/svg+xml'})),img=new Image();img.onload=()=>{ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.drawImage(img,0,0,ctx.canvas.width,ctx.canvas.height);if(frame.hand&&state.handImage){const [x,y,w,h]=frame.box,sx=ctx.canvas.width/w,sy=ctx.canvas.height/h;ctx.drawImage(state.handImage,(frame.hand.x-120-x)*sx,(frame.hand.y-32-y)*sy,430*sx,287*sy);}URL.revokeObjectURL(url);resolve();};img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Frame could not be drawn'));};img.src=url;});}
   async function exportVideo(){
     if(state.exporting)return;
     if(!window.MediaRecorder||!HTMLCanvasElement.prototype.captureStream){toast('Video export is unavailable in this browser.');return;}
@@ -239,6 +282,45 @@
     finally{stream.getTracks().forEach(x=>x.stop());audioEl?.pause();audioCtx?.close();state.exporting=false;}
   }
   async function readFile(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(file);});}
+  async function traceImage(src){
+    const image=new Image();image.src=src;await image.decode();
+    const size=96,canvas=document.createElement('canvas');canvas.width=canvas.height=size;
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.clearRect(0,0,size,size);
+    ctx.drawImage(image,0,0,size,size);const pixels=ctx.getImageData(0,0,size,size).data;
+    const lum=new Float32Array(size*size),alpha=new Uint8Array(size*size);let transparent=0,inside=0;
+    for(let y=0;y<size;y++)for(let x=0;x<size;x++){
+      const i=y*size+x,j=i*4;lum[i]=.2126*pixels[j]+.7152*pixels[j+1]+.0722*pixels[j+2];alpha[i]=pixels[j+3];
+      inside++;if(alpha[i]<230)transparent++;
+    }
+    const hasAlpha=transparent/Math.max(1,inside)>.03,ink=new Uint8Array(size*size);
+    for(let y=1;y<size-1;y++)for(let x=1;x<size-1;x++){
+      const i=y*size+x;if(alpha[i]<60)continue;
+      if(hasAlpha)ink[i]=1;
+      else {const contrast=Math.abs(lum[i-1]-lum[i+1])+Math.abs(lum[i-size]-lum[i+size]);ink[i]=(lum[i]<135||contrast>85)?1:0;}
+    }
+    const cases={1:[[3,0]],2:[[0,1]],3:[[3,1]],4:[[1,2]],5:[[3,0],[1,2]],6:[[0,2]],7:[[3,2]],8:[[2,3]],9:[[0,2]],10:[[0,1],[2,3]],11:[[1,2]],12:[[1,3]],13:[[0,1]],14:[[3,0]]};
+    const segments=[],point=(edge,x,y)=>edge===0?[x+.5,y]:edge===1?[x+1,y+.5]:edge===2?[x+.5,y+1]:[x,y+.5];
+    for(let y=0;y<size-1;y++)for(let x=0;x<size-1;x++){
+      const bits=ink[y*size+x]|(ink[y*size+x+1]<<1)|(ink[(y+1)*size+x+1]<<2)|(ink[(y+1)*size+x]<<3);
+      for(const [a,b] of cases[bits]||[])segments.push([point(a,x,y),point(b,x,y)]);
+    }
+    const links=new Map(),key=p=>`${p[0]},${p[1]}`;
+    segments.forEach((s,i)=>s.forEach(p=>{const k=key(p);if(!links.has(k))links.set(k,[]);links.get(k).push(i);}));
+    const used=new Uint8Array(segments.length),traces=[];
+    segments.forEach((segment,index)=>{
+      if(used[index])return;used[index]=1;const pts=[segment[0],segment[1]];
+      for(const atStart of [false,true])for(let n=0;n<500;n++){
+        const end=atStart?pts[0]:pts[pts.length-1],next=(links.get(key(end))||[]).find(i=>!used[i]);if(next==null)break;
+        used[next]=1;const other=segments[next][key(segments[next][0])===key(end)?1:0];if(atStart)pts.unshift(other);else pts.push(other);
+      }
+      if(pts.length<6)return;
+      let distance=0;for(let i=1;i<pts.length;i++)distance+=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);
+      if(distance<9)return;
+      const reduced=pts.filter((p,i)=>i===0||i===pts.length-1||i%2===0);
+      traces.push({distance,d:'M'+reduced.map(p=>`${(p[0]*100/(size-1)).toFixed(1)} ${(p[1]*100/(size-1)).toFixed(1)}`).join(' L')});
+    });
+    return traces.sort((a,b)=>b.distance-a.distance).slice(0,50).map(x=>x.d);
+  }
   async function uploadImage(file){
     if(!file)return;if(file.size>12*1024*1024){toast('Choose an image under 12 MB.');return;}
     try{
@@ -248,14 +330,21 @@
           const vb=(root.getAttribute('viewBox')||'0 0 100 100').split(/[\s,]+/).map(Number);
           const paths=[...root.querySelectorAll('path')];
           if(paths.length&&paths.length<200&&paths.every(p=>!p.hasAttribute('transform')&&!p.closest('g[transform]'))&&vb.length===4&&vb.every(Number.isFinite)){
-            const clean=paths.map(p=>({d:p.getAttribute('d')||'',stroke:p.getAttribute('stroke')||'#285d63',fill:p.getAttribute('fill')||'none',sw:num(p.getAttribute('stroke-width'),3)})).filter(p=>p.d&&p.d.length<50000);
+            const clean=paths.map(p=>{const fill=safePaint(p.getAttribute('fill')||'none','none'),stroke=safePaint(p.getAttribute('stroke')||((fill!=='none'&&fill!=='transparent')?fill:'#285d63'),'#285d63');return {d:p.getAttribute('d')||'',stroke:stroke==='none'?(fill==='none'?'#285d63':fill):stroke,fill,sw:num(p.getAttribute('stroke-width'),3)};}).filter(p=>p.d&&p.d.length<50000);
             if(clean.length){addItem({...baseItem('vector'),paths:clean,vb,x:600,y:280,w:400,h:400,color:'#285d63',animation:'draw'});toast('SVG paths added as a drawing.');return;}
           }
+          for(const el of [root,...root.querySelectorAll('*')]){
+            if(['script','style','foreignobject','iframe','object','embed','image','animate','set'].includes(el.localName.toLowerCase())){el.remove();continue;}
+            for(const attr of [...el.attributes]){const name=attr.name.toLowerCase(),value=attr.value;if(name.startsWith('on')||((name==='href'||name.endsWith(':href'))&&!value.startsWith('#'))||/url\(\s*['"]?(?!#)/i.test(value)||(name==='style'&&/@import|expression/i.test(value)))el.removeAttribute(attr.name);}
+          }
+          const safe=await readFile(new Blob([new XMLSerializer().serializeToString(root)],{type:'image/svg+xml'})),tracePaths=await traceImage(safe);
+          addItem({...baseItem('image'),src:safe,tracePaths,x:620,y:250,w:420,h:400});toast('SVG artwork added with marker tracing.');return;
         }
-        toast('This SVG has unsupported drawing features. Use one made from plain paths.');return;
+        toast('That SVG could not be read.');return;
       }
       const src=await readFile(file);if(!/^data:image\/(png|jpeg|svg\+xml);base64,/.test(src)){toast('Use a PNG, JPEG, or SVG image.');return;}
-      addItem({...baseItem('image'),src,x:620,y:250,w:420,h:400,animation:'reveal'});toast('Image added with a reveal animation.');
+      const tracePaths=await traceImage(src);
+      addItem({...baseItem('image'),src,tracePaths,x:620,y:250,w:420,h:400});toast('Image added with marker tracing.');
     }catch(e){toast('Could not read that image.');}
   }
   async function uploadAudio(file){if(!file)return;if(file.size>25*1024*1024){toast('Choose an audio file under 25 MB.');return;}try{const src=await readFile(file);snapshot();state.project.audio={name:file.name,src};state.audio=null;changed();toast('Audio added.');}catch{toast('Could not read that audio file.');}}
@@ -314,6 +403,11 @@
     document.addEventListener('keydown',e=>{const typing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(e.ctrlKey||e.metaKey){if(e.key.toLowerCase()==='z'){e.preventDefault();if(state.undo.length){state.redo.push(clone(state.project));state.project=state.undo.pop();state.sceneIndex=clamp(state.sceneIndex,0,state.project.scenes.length-1);state.selected=null;changed();}return;}if(e.key.toLowerCase()==='y'){e.preventDefault();if(state.redo.length){state.undo.push(clone(state.project));state.project=state.redo.pop();state.sceneIndex=clamp(state.sceneIndex,0,state.project.scenes.length-1);state.selected=null;changed();}return;}}if(typing)return;if(e.code==='Space'){e.preventDefault();play();}if((e.key==='Delete'||e.key==='Backspace')&&state.selected){e.preventDefault();action('delete');}if(e.key==='Escape'&&state.preview)stopPreview();});
     window.addEventListener('beforeunload',()=>{if(state.project)saveProject();});
   }
-  async function init(){try{state.db=await openDb();const current=localStorage.getItem('whiteboard-current');let p=current?await dbTask('readonly',s=>s.get(current)):null;if(!p){const all=await listProjects();p=all[0]||demoProject();}state.project=p;bind();new ResizeObserver(fitStage).observe($('#canvasShell'));renderAll();await saveProject();}catch(e){console.error(e);$('#inspector').innerHTML='<h2 class="panel-title">Storage unavailable</h2><p class="panel-help">This app needs browser storage. Please enable it and reload.</p>';}}
+  async function init(){try{
+    const fontResponse=await fetch('./assets/stroke-font.json');if(!fontResponse.ok)throw new Error('Writing font did not load');state.fonts=await fontResponse.json();
+    const hand=new Image();hand.src='./assets/marker-hand.png';await hand.decode();state.handImage=hand;
+    state.db=await openDb();const current=localStorage.getItem('whiteboard-current');let p=current?await dbTask('readonly',s=>s.get(current)):null;if(!p){const all=await listProjects();p=all[0]||demoProject();}
+    state.project=await migrateProject(p);bind();new ResizeObserver(fitStage).observe($('#canvasShell'));renderAll();await saveProject();
+  }catch(e){console.error(e);$('#inspector').innerHTML=`<h2 class="panel-title">Could not open the editor</h2><p class="panel-help">${esc(e.message)}. Reload the app to try again.</p>`;}}
   init();
 })();
