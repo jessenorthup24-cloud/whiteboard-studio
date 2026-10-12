@@ -2,6 +2,8 @@
 
 A browser-based whiteboard video editor prototype.
 
+For the full Claude Code migration guide, including the saved project backup and artwork inventory, read [HANDOFF.md](HANDOFF.md).
+
 ## Run locally
 
 Install Node.js, then run `node serve.cjs` in this folder and open `http://127.0.0.1:4173` in your browser. No package installation is needed.

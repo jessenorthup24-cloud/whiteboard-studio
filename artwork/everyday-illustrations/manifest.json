@@ -1,0 +1,502 @@
+[
+  {
+    "name": "Happy man",
+    "file": "individual/happy-man.png",
+    "category": "Men: emotions"
+  },
+  {
+    "name": "Sad man",
+    "file": "individual/sad-man.png",
+    "category": "Men: emotions"
+  },
+  {
+    "name": "Angry man",
+    "file": "individual/angry-man.png",
+    "category": "Men: emotions"
+  },
+  {
+    "name": "Surprised man",
+    "file": "individual/surprised-man.png",
+    "category": "Men: emotions"
+  },
+  {
+    "name": "Confused man",
+    "file": "individual/confused-man.png",
+    "category": "Men: emotions"
+  },
+  {
+    "name": "Excited man",
+    "file": "individual/excited-man.png",
+    "category": "Men: emotions"
+  },
+  {
+    "name": "Worried man",
+    "file": "individual/worried-man.png",
+    "category": "Men: emotions"
+  },
+  {
+    "name": "Thoughtful man",
+    "file": "individual/thoughtful-man.png",
+    "category": "Men: emotions"
+  },
+  {
+    "name": "Tired man",
+    "file": "individual/tired-man.png",
+    "category": "Men: emotions"
+  },
+  {
+    "name": "Confident man",
+    "file": "individual/confident-man.png",
+    "category": "Men: emotions"
+  },
+  {
+    "name": "Happy woman",
+    "file": "individual/happy-woman.png",
+    "category": "Women: emotions"
+  },
+  {
+    "name": "Sad woman",
+    "file": "individual/sad-woman.png",
+    "category": "Women: emotions"
+  },
+  {
+    "name": "Angry woman",
+    "file": "individual/angry-woman.png",
+    "category": "Women: emotions"
+  },
+  {
+    "name": "Surprised woman",
+    "file": "individual/surprised-woman.png",
+    "category": "Women: emotions"
+  },
+  {
+    "name": "Confused woman",
+    "file": "individual/confused-woman.png",
+    "category": "Women: emotions"
+  },
+  {
+    "name": "Excited woman",
+    "file": "individual/excited-woman.png",
+    "category": "Women: emotions"
+  },
+  {
+    "name": "Worried woman",
+    "file": "individual/worried-woman.png",
+    "category": "Women: emotions"
+  },
+  {
+    "name": "Thoughtful woman",
+    "file": "individual/thoughtful-woman.png",
+    "category": "Women: emotions"
+  },
+  {
+    "name": "Tired woman",
+    "file": "individual/tired-woman.png",
+    "category": "Women: emotions"
+  },
+  {
+    "name": "Confident woman",
+    "file": "individual/confident-woman.png",
+    "category": "Women: emotions"
+  },
+  {
+    "name": "Waving hand",
+    "file": "individual/waving-hand.png",
+    "category": "Gestures"
+  },
+  {
+    "name": "Handshake",
+    "file": "individual/handshake.png",
+    "category": "Gestures"
+  },
+  {
+    "name": "Thumbs up",
+    "file": "individual/thumbs-up.png",
+    "category": "Gestures"
+  },
+  {
+    "name": "Thumbs down",
+    "file": "individual/thumbs-down.png",
+    "category": "Gestures"
+  },
+  {
+    "name": "High five",
+    "file": "individual/high-five.png",
+    "category": "Gestures"
+  },
+  {
+    "name": "Pointing right",
+    "file": "individual/pointing-right.png",
+    "category": "Gestures"
+  },
+  {
+    "name": "Clapping hands",
+    "file": "individual/clapping-hands.png",
+    "category": "Gestures"
+  },
+  {
+    "name": "Praying hands",
+    "file": "individual/praying-hands.png",
+    "category": "Gestures"
+  },
+  {
+    "name": "Helping hands",
+    "file": "individual/helping-hands.png",
+    "category": "Gestures"
+  },
+  {
+    "name": "Fist bump",
+    "file": "individual/fist-bump.png",
+    "category": "Gestures"
+  },
+  {
+    "name": "Presentation chart",
+    "file": "individual/presentation-chart.png",
+    "category": "Work and study"
+  },
+  {
+    "name": "Magnifying glass",
+    "file": "individual/magnifying-glass.png",
+    "category": "Work and study"
+  },
+  {
+    "name": "Clipboard",
+    "file": "individual/clipboard.png",
+    "category": "Work and study"
+  },
+  {
+    "name": "Calendar",
+    "file": "individual/calendar.png",
+    "category": "Work and study"
+  },
+  {
+    "name": "Clock",
+    "file": "individual/clock.png",
+    "category": "Work and study"
+  },
+  {
+    "name": "Light bulb",
+    "file": "individual/light-bulb.png",
+    "category": "Work and study"
+  },
+  {
+    "name": "Trophy",
+    "file": "individual/trophy.png",
+    "category": "Work and study"
+  },
+  {
+    "name": "Target",
+    "file": "individual/target.png",
+    "category": "Work and study"
+  },
+  {
+    "name": "Puzzle piece",
+    "file": "individual/puzzle-piece.png",
+    "category": "Work and study"
+  },
+  {
+    "name": "Books",
+    "file": "individual/books.png",
+    "category": "Work and study"
+  },
+  {
+    "name": "Email envelope",
+    "file": "individual/email-envelope.png",
+    "category": "Communication"
+  },
+  {
+    "name": "Smartphone",
+    "file": "individual/smartphone.png",
+    "category": "Communication"
+  },
+  {
+    "name": "Speech bubble",
+    "file": "individual/speech-bubble.png",
+    "category": "Communication"
+  },
+  {
+    "name": "Question bubble",
+    "file": "individual/question-bubble.png",
+    "category": "Communication"
+  },
+  {
+    "name": "Video camera",
+    "file": "individual/video-camera.png",
+    "category": "Communication"
+  },
+  {
+    "name": "Microphone",
+    "file": "individual/microphone.png",
+    "category": "Communication"
+  },
+  {
+    "name": "Headphones",
+    "file": "individual/headphones.png",
+    "category": "Communication"
+  },
+  {
+    "name": "Megaphone",
+    "file": "individual/megaphone.png",
+    "category": "Communication"
+  },
+  {
+    "name": "Chat bubbles",
+    "file": "individual/chat-bubbles.png",
+    "category": "Communication"
+  },
+  {
+    "name": "Notification bell",
+    "file": "individual/notification-bell.png",
+    "category": "Communication"
+  },
+  {
+    "name": "Key",
+    "file": "individual/key.png",
+    "category": "Home and daily life"
+  },
+  {
+    "name": "Front door",
+    "file": "individual/front-door.png",
+    "category": "Home and daily life"
+  },
+  {
+    "name": "Houseplant",
+    "file": "individual/houseplant.png",
+    "category": "Home and daily life"
+  },
+  {
+    "name": "Coffee cup",
+    "file": "individual/coffee-cup.png",
+    "category": "Home and daily life"
+  },
+  {
+    "name": "Shopping bag",
+    "file": "individual/shopping-bag.png",
+    "category": "Home and daily life"
+  },
+  {
+    "name": "Umbrella",
+    "file": "individual/umbrella.png",
+    "category": "Home and daily life"
+  },
+  {
+    "name": "Gift box",
+    "file": "individual/gift-box.png",
+    "category": "Home and daily life"
+  },
+  {
+    "name": "Birthday cake",
+    "file": "individual/birthday-cake.png",
+    "category": "Home and daily life"
+  },
+  {
+    "name": "Dinner plate",
+    "file": "individual/dinner-plate.png",
+    "category": "Home and daily life"
+  },
+  {
+    "name": "Toolbox",
+    "file": "individual/toolbox.png",
+    "category": "Home and daily life"
+  },
+  {
+    "name": "Heart pulse",
+    "file": "individual/heart-pulse.png",
+    "category": "Wellness"
+  },
+  {
+    "name": "First aid kit",
+    "file": "individual/first-aid-kit.png",
+    "category": "Wellness"
+  },
+  {
+    "name": "Water bottle",
+    "file": "individual/water-bottle.png",
+    "category": "Wellness"
+  },
+  {
+    "name": "Running shoe",
+    "file": "individual/running-shoe.png",
+    "category": "Wellness"
+  },
+  {
+    "name": "Dumbbell",
+    "file": "individual/dumbbell.png",
+    "category": "Wellness"
+  },
+  {
+    "name": "Yoga mat",
+    "file": "individual/yoga-mat.png",
+    "category": "Wellness"
+  },
+  {
+    "name": "Bicycle helmet",
+    "file": "individual/bicycle-helmet.png",
+    "category": "Wellness"
+  },
+  {
+    "name": "Sleep moon",
+    "file": "individual/sleep-moon.png",
+    "category": "Wellness"
+  },
+  {
+    "name": "Sunglasses sun",
+    "file": "individual/sunglasses-sun.png",
+    "category": "Wellness"
+  },
+  {
+    "name": "Bandage",
+    "file": "individual/bandage.png",
+    "category": "Wellness"
+  },
+  {
+    "name": "Smiling sun",
+    "file": "individual/smiling-sun.png",
+    "category": "Nature and weather"
+  },
+  {
+    "name": "Rain cloud",
+    "file": "individual/rain-cloud.png",
+    "category": "Nature and weather"
+  },
+  {
+    "name": "Snowflake",
+    "file": "individual/snowflake.png",
+    "category": "Nature and weather"
+  },
+  {
+    "name": "Rainbow",
+    "file": "individual/rainbow.png",
+    "category": "Nature and weather"
+  },
+  {
+    "name": "Wind",
+    "file": "individual/wind.png",
+    "category": "Nature and weather"
+  },
+  {
+    "name": "Mountain",
+    "file": "individual/mountain.png",
+    "category": "Nature and weather"
+  },
+  {
+    "name": "Ocean wave",
+    "file": "individual/ocean-wave.png",
+    "category": "Nature and weather"
+  },
+  {
+    "name": "Leaf",
+    "file": "individual/leaf.png",
+    "category": "Nature and weather"
+  },
+  {
+    "name": "Campfire",
+    "file": "individual/campfire.png",
+    "category": "Nature and weather"
+  },
+  {
+    "name": "Seedling",
+    "file": "individual/seedling.png",
+    "category": "Nature and weather"
+  },
+  {
+    "name": "Right arrow",
+    "file": "individual/right-arrow.png",
+    "category": "Arrows"
+  },
+  {
+    "name": "Left arrow",
+    "file": "individual/left-arrow.png",
+    "category": "Arrows"
+  },
+  {
+    "name": "Up arrow",
+    "file": "individual/up-arrow.png",
+    "category": "Arrows"
+  },
+  {
+    "name": "Down arrow",
+    "file": "individual/down-arrow.png",
+    "category": "Arrows"
+  },
+  {
+    "name": "Up-right arrow",
+    "file": "individual/up-right-arrow.png",
+    "category": "Arrows"
+  },
+  {
+    "name": "Curved right arrow",
+    "file": "individual/curved-right-arrow.png",
+    "category": "Arrows"
+  },
+  {
+    "name": "Curved left arrow",
+    "file": "individual/curved-left-arrow.png",
+    "category": "Arrows"
+  },
+  {
+    "name": "U-turn arrow",
+    "file": "individual/u-turn-arrow.png",
+    "category": "Arrows"
+  },
+  {
+    "name": "Circular arrows",
+    "file": "individual/circular-arrows.png",
+    "category": "Arrows"
+  },
+  {
+    "name": "Double-headed arrow",
+    "file": "individual/double-headed-arrow.png",
+    "category": "Arrows"
+  },
+  {
+    "name": "Number 0",
+    "file": "individual/number-0.png",
+    "category": "Numbers"
+  },
+  {
+    "name": "Number 1",
+    "file": "individual/number-1.png",
+    "category": "Numbers"
+  },
+  {
+    "name": "Number 2",
+    "file": "individual/number-2.png",
+    "category": "Numbers"
+  },
+  {
+    "name": "Number 3",
+    "file": "individual/number-3.png",
+    "category": "Numbers"
+  },
+  {
+    "name": "Number 4",
+    "file": "individual/number-4.png",
+    "category": "Numbers"
+  },
+  {
+    "name": "Number 5",
+    "file": "individual/number-5.png",
+    "category": "Numbers"
+  },
+  {
+    "name": "Number 6",
+    "file": "individual/number-6.png",
+    "category": "Numbers"
+  },
+  {
+    "name": "Number 7",
+    "file": "individual/number-7.png",
+    "category": "Numbers"
+  },
+  {
+    "name": "Number 8",
+    "file": "individual/number-8.png",
+    "category": "Numbers"
+  },
+  {
+    "name": "Number 9",
+    "file": "individual/number-9.png",
+    "category": "Numbers"
+  }
+]

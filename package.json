@@ -1,0 +1,10 @@
+{
+  "name": "whiteboard-studio",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local whiteboard video editor",
+  "scripts": {
+    "dev": "node serve.cjs",
+    "check": "node --check dist/app.js"
+  }
+}

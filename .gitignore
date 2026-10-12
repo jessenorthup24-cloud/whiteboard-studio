@@ -1,0 +1,4 @@
+node_modules/
+project-backups/*.json
+*.log
+.DS_Store
