@@ -114,7 +114,7 @@
         const next={cx:it.cx,cy:it.cy,zoom:it.zoom};
         if(t>=end) camera=next;
         else if(t>=start){const p=clamp((t-start)/(end-start),0,1);camera={cx:camera.cx+(next.cx-camera.cx)*p,cy:camera.cy+(next.cy-camera.cy)*p,zoom:camera.zoom+(next.zoom-camera.zoom)*p};}
-      }else if(t>=start){visible.push({it,progress:clamp((t-start)/(end-start),0,1),active:t<end});}
+      }else if(t>=start){visible.push({it,progress:clamp((t-start)/(end-start),0,1),active:t<end,since:t-end});}
     }
     return {camera,visible};
   }
@@ -340,6 +340,25 @@
     const outer=handTransform;handTransform=outer?matMul(outer,m):m;
     try{return `<g transform="matrix(${m.map(v=>+v.toFixed(6)).join(' ')})">${drawElement(it,progress,selectable,hand)}</g>`;}finally{handTransform=outer;}
   }
+  // Looping effects play once an item has finished drawing and carry on until its scene ends: pulse (grows and
+  // settles), spin (full turns), rock (tilts back and forth) and glow (a soft colored halo that brightens and fades).
+  // Speed is seconds per cycle; strength runs from 0 to 1. They show in Preview and in exported videos.
+  const EFFECTS=[['none','None'],['pulse','Pulse'],['spin','Spin'],['rock','Rock back and forth'],['glow','Glow']],EFFECT_SPEED={pulse:1.2,spin:3,rock:1.6,glow:1.8};
+  function effectMarkup(it,since,inner){
+    const e=it.effect;if(!e||e==='none'||!EFFECT_SPEED[e]||it.type==='camera'||!(since>=0))return inner;
+    const period=clamp(num(it.effectSpeed,EFFECT_SPEED[e]),.2,20),k=clamp(num(it.effectStrength,.5),0,1),turn=since/period*2*Math.PI,swell=(1-Math.cos(turn))/2,[cx,cy]=centerOf(it);
+    if(e==='pulse'){const s=1+swell*(.04+k*.26);return `<g transform="translate(${cx} ${cy}) scale(${s.toFixed(4)}) translate(${-cx} ${-cy})">${inner}</g>`;}
+    if(e==='spin'||e==='rock'){const deg=e==='spin'?since/period*360*(it.effectReverse?-1:1):Math.sin(turn)*(4+k*26);return `<g transform="rotate(${deg.toFixed(3)} ${cx} ${cy})">${inner}</g>`;}
+    const fid='fx'+String(it.id).replace(/[^\w-]/g,''),blur=Math.max(4,Math.max(it.w,it.h)*(.03+k*.05)),color=/^#[0-9a-f]{3,8}$/i.test(it.effectColor||'')?it.effectColor:'#ffd447';
+    return `<defs><filter id="${fid}" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur in="SourceAlpha" stdDeviation="${blur.toFixed(1)}" result="b"/><feFlood flood-color="${color}"/><feComposite in2="b" operator="in" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="g"/></feMerge></filter></defs><g opacity="${(swell*(.45+k*.55)).toFixed(3)}" filter="url(#${fid})">${inner}</g>${inner}`;
+  }
+  function effectFields(it){
+    const e=EFFECT_SPEED[it.effect]?it.effect:'none';
+    return `<div class="panel-divider"></div><div class="field"><label>Effect after drawing</label><select data-set="effect">${EFFECTS.map(([v,n])=>`<option value="${v}" ${e===v?'selected':''}>${n}</option>`).join('')}</select></div>`+(e==='none'?'':
+      `<div class="field-row">${field('Seconds per cycle','effectSpeed',num(it.effectSpeed,EFFECT_SPEED[e]),'number','min="0.2" max="20" step="0.1"')}${e==='spin'?'<div class="field"></div>':`<div class="field"><label>Strength</label><input data-set="effectStrength" type="range" min="0" max="1" step="0.05" value="${clamp(num(it.effectStrength,.5),0,1)}"></div>`}</div>`+
+      (e==='glow'?field('Glow color','effectColor',it.effectColor||'#ffd447','color'):'')+(e==='spin'?`<label class="check-row"><input type="checkbox" data-effect-reverse ${it.effectReverse?'checked':''}> Spin counter-clockwise</label>`:'')+
+      '<p class="panel-help">Starts when this drawing is finished and keeps going until the scene ends. Press Preview to see it.</p>');
+  }
   function drawElement(it,progress,selectable,hand){
     const attr=selectable?`data-item="${esc(it.id)}" style="cursor:move"`:'';
     const start=`<g ${attr}>`,hit=selectable?`<rect x="${it.x}" y="${it.y}" width="${it.w}" height="${it.h}" fill="transparent" pointer-events="all"/>`:'',end='</g>';
@@ -370,7 +389,7 @@
     if(editing)for(const cam of s.items.filter(x=>x.type==='camera')){const [x,y,w,h]=cameraBox(cam);markup+=`<rect data-item="${esc(cam.id)}" x="${x}" y="${y}" width="${w}" height="${h}" fill="#72baa20d" stroke="#64a99a" stroke-width="${Math.max(2,frameBox[2]/500)}" stroke-dasharray="${Math.max(10,frameBox[2]/90)} ${Math.max(6,frameBox[2]/150)}" style="cursor:move" pointer-events="all"/>`;}
     for(const v of [...vis.visible].sort((a,b)=>num(a.it.z)-num(b.it.z))){
       const it=v.it;
-      markup+=elementMarkup(it,v.progress,editing,v.active&&!editing);
+      markup+=effectMarkup(it,v.since,elementMarkup(it,v.progress,editing,v.active&&!editing));
     }
     if(editing){
       const selected=item();
@@ -456,7 +475,7 @@
   }
   function renderTimeline(){renderTimelineStrips();renderAudioEditor();renderTimelineClock();}
   function renderTimelineStrips(){
-    $('#sceneStrip').innerHTML=state.project.scenes.map((s,i)=>`<button class="scene-tile ${i===state.sceneIndex?'active':''}" data-scene="${i}" title="Drag to reorder scenes"><span class="scene-number">${String(i+1).padStart(2,'0')}</span><span class="scene-name">${esc(s.name)}</span><span class="scene-length">${fmt(sceneLen(s))}</span></button>`).join('');
+    $('#sceneStrip').innerHTML=state.project.scenes.map((s,i)=>`<button class="scene-tile ${i===state.sceneIndex?'active':''}" data-scene="${i}" title="Drag to reorder scenes"><span class="scene-number">${String(i+1).padStart(2,'0')}</span><span class="scene-name">${esc(s.name)}</span><span class="scene-length">${fmt(sceneLen(s))}</span>${state.project.scenes.length>1?`<span class="scene-del" data-scene-delete="${i}" title="Delete this scene" role="button" aria-label="Delete ${esc(s.name)}">×</span>`:''}</button>`).join('');
     timelineBoxes=timelineLayout();
     const width=timelineBoxes.length?timelineX(Infinity)+TILE_GAP:0,rows=Math.max(1,...timelineBoxes.map(b=>b.row+1)),len=sceneLen(scene()),every=[1,2,5,10,15,30,60].find(s=>s*TIMELINE_PX>=44)||60;
     let ticks='';for(let t=0;t<=len+1e-6;t+=every)ticks+=`<span class="tick" style="left:${timelineX(t)}px">${Math.round(t)}s</span>`;
@@ -544,7 +563,7 @@
       const move=ev=>{if(ev.pointerId===e.pointerId)at(ev);},up=ev=>{if(ev.pointerId!==e.pointerId)return;window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up);};
       window.addEventListener('pointermove',move);window.addEventListener('pointerup',up);
     });
-    $('#sceneStrip').addEventListener('click',e=>{const b=e.target.closest('[data-scene]');if(!b||suppressTileClick)return;stopPreview();state.sceneIndex=+b.dataset.scene;state.selected=null;state.time=sceneStart(state.sceneIndex);renderAll();});
+    $('#sceneStrip').addEventListener('click',e=>{const del=e.target.closest('[data-scene-delete]');if(del&&!suppressTileClick){stopPreview();deleteScene(+del.dataset.sceneDelete);return;}const b=e.target.closest('[data-scene]');if(!b||suppressTileClick)return;stopPreview();state.sceneIndex=+b.dataset.scene;state.selected=null;state.time=sceneStart(state.sceneIndex);renderAll();});
     $('#itemStrip').addEventListener('click',e=>{const b=e.target.closest('.item-tile');if(b&&!suppressTileClick){stopPreview();selectItem(b.dataset.item);}});
   }
   // Audio: clips on two lanes, music and narration, placed anywhere on the whole video's timeline. A clip plays a stretch
@@ -695,6 +714,7 @@
       if(e.target.matches('[data-voice-speed]')){state.project.voiceSpeed=+e.target.value;$('#voiceSpeedLabel').textContent=`${Math.round(e.target.value*100)}%`;changed(false);return;}
       if(e.target.matches('[data-clip-set]'))applyClipField(e.target.dataset.clipSet,e.target.value);});
     $('#inspector').addEventListener('change',e=>{
+      if(e.target.matches('[data-effect-reverse]')){const it=item();if(it){snapshot();it.effectReverse=e.target.checked;changed(false);}return;}
       if(e.target.matches('[data-voice]')){state.project.voice=e.target.value;changed(false);return;}
       if(e.target.matches('[data-scene-timing]')){scene().narrationTiming=e.target.value;changed(false);return;}
       if(e.target.matches('[data-duck]')){state.project.duckMusic=e.target.checked;changed(false);return;}
@@ -1022,6 +1042,8 @@
   }
   const field=(label,key,val,type='text',opts='')=>`<div class="field"><label>${label}</label><input data-set="${key}" type="${type}" value="${esc(val)}" ${opts}></div>`;
   const selectField=(label,key,val,options)=>`<div class="field"><label>${label}</label><select data-set="${key}">${options.map(([v,n])=>`<option value="${v}" ${val===v?'selected':''}>${n}</option>`).join('')}</select></div>`;
+  // The video's aspect ratio (all camera frames follow it), offered in scene settings and on camera moves.
+  const formatField=()=>`<div class="field"><label>Camera and video format</label><div class="segmented">${[['16:9','Wide'],['1:1','Square'],['9:16','Tall']].map(([v,n])=>`<button data-ratio="${v}" class="${state.project.ratio===v?'active':''}">${n}</button>`).join('')}</div></div>`;
   function renderInspector(){
     const it=item(),s=scene(),clip=clipById(state.selectedClip),several=selectedItems().filter(x=>x.type!=='camera');let html='';
     if(several.length>1)html=multiPanel(several);
@@ -1029,7 +1051,7 @@
     else if(it){
       html=`<div class="panel-eyebrow">SELECTED ${it.type.toUpperCase()}</div><h2 class="panel-title">${esc(tileLabel(it))}</h2><p class="panel-help">Fine tune how this part of your story appears.</p>`;
       if(it.type==='camera'){
-        html+=`<div class="panel-divider"></div>${field('Zoom','zoom',it.zoom,'number','min="0.2" max="5" step="0.05"')}<div class="field-row">${field('Center X','cx',Math.round(it.cx),'number','step="10"')}${field('Center Y','cy',Math.round(it.cy),'number','step="10"')}</div><button class="panel-action camera-preview" data-action="preview-camera">Preview this camera frame</button><p class="panel-help camera-help">Drag the green frame to pan. Drag its handles to resize the shot. Preview is cropped to this frame.</p>`;
+        html+=`<div class="panel-divider"></div>${field('Zoom','zoom',it.zoom,'number','min="0.2" max="5" step="0.05"')}<div class="field-row">${field('Center X','cx',Math.round(it.cx),'number','step="10"')}${field('Center Y','cy',Math.round(it.cy),'number','step="10"')}</div>${formatField()}<button class="panel-action camera-preview" data-action="preview-camera">Preview this camera frame</button><p class="panel-help camera-help">Drag the green frame to pan. Drag its handles to resize the shot. Preview is cropped to this frame.</p>`;
       }else{
         if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}<div class="field"><label>Align</label><div class="segmented">${[['left','⇤ Left'],['center','↔ Center'],['right','Right ⇥']].map(([v,n])=>`<button data-align="${v}" class="${(it.align||'left')===v?'active':''}" title="Align text ${v}">${n}</button>`).join('')}</div></div>${fontPicker(it)}`;
         if(it.type==='icon'||it.type==='text'||it.type==='vector')html+=field('Color','color',it.color||'#285d63','color');
@@ -1040,7 +1062,7 @@
         if(it.type==='image')html+=`<div class="note-card">${it.illustration?'The marker draws the line work first, then colors in each area. Transparent areas stay clear.':'The marker traces visible contours and fills only visible artwork. Transparent areas stay clear.'}</div>`;
       }
       const first=s.items[0]===it;
-      html+=`<div class="panel-divider"></div><div class="field"><label>Starts</label><div class="segmented"><button data-start-mode="after" class="${it.withPrevious&&!first?'':'active'}">After previous</button><button data-start-mode="with" class="${it.withPrevious&&!first?'active':''}" ${first?'disabled title="The first item has nothing before it"':''}>With previous</button></div></div><div class="field-row">${field('Duration (sec)','duration',it.duration,'number','min="0.1" max="60" step="0.1"')}${field('Pause (sec)','pause',it.pause,'number','min="0" max="60" step="0.1"')}</div><div class="field-row">${field('Delay (sec)','delay',num(it.delay),'number','min="0" max="60" step="0.1"')}<div class="field"></div></div><div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-action="duplicate">Duplicate</button><button class="panel-action" data-action="back">Move earlier</button><button class="panel-action" data-action="forward">Move later</button><button class="panel-action danger" data-action="delete">Delete</button></div>`;
+      html+=`<div class="panel-divider"></div><div class="field"><label>Starts</label><div class="segmented"><button data-start-mode="after" class="${it.withPrevious&&!first?'':'active'}">After previous</button><button data-start-mode="with" class="${it.withPrevious&&!first?'active':''}" ${first?'disabled title="The first item has nothing before it"':''}>With previous</button></div></div><div class="field-row">${field('Duration (sec)','duration',it.duration,'number','min="0.1" max="60" step="0.1"')}${field('Pause (sec)','pause',it.pause,'number','min="0" max="60" step="0.1"')}</div><div class="field-row">${field('Delay (sec)','delay',num(it.delay),'number','min="0" max="60" step="0.1"')}<div class="field"></div></div>${it.type==='camera'?'':effectFields(it)}<div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-action="duplicate">Duplicate</button><button class="panel-action" data-action="back">Move earlier</button><button class="panel-action" data-action="forward">Move later</button><button class="panel-action danger" data-action="delete">Delete</button></div>`;
     }else if(state.tool==='icon'){
       html=libraryPanel();
     }else if(state.tool==='shape'){
@@ -1048,7 +1070,7 @@
     }else if(state.tool==='audio'){
       html=audioPanel();
     }else{
-      html=`<div class="panel-eyebrow">SCENE SETTINGS</div><h2 class="panel-title">${esc(s.name)}</h2><p class="panel-help">Build your whiteboard story, one moment at a time.</p>${field('Scene name','sceneName',s.name)}${field('Background','background',s.background,'color')}${scriptFields(s)}<div class="panel-divider"></div><div class="field"><label>Camera and video format</label><div class="segmented">${[['16:9','Wide'],['1:1','Square'],['9:16','Tall']].map(([v,n])=>`<button data-ratio="${v}" class="${state.project.ratio===v?'active':''}">${n}</button>`).join('')}</div></div><div class="panel-divider"></div><div class="note-card">Pan across the whiteboard to build beyond the first frame. Add camera views to choose each shot.</div><div class="panel-divider"></div><button class="panel-action danger" data-action="scene-delete" ${state.project.scenes.length===1?'disabled':''}>Delete scene</button>`;
+      html=`<div class="panel-eyebrow">SCENE SETTINGS</div><h2 class="panel-title">${esc(s.name)}</h2><p class="panel-help">Build your whiteboard story, one moment at a time.</p>${field('Scene name','sceneName',s.name)}${field('Background','background',s.background,'color')}${scriptFields(s)}<div class="panel-divider"></div>${formatField()}<div class="panel-divider"></div><div class="note-card">Pan across the whiteboard to build beyond the first frame. Add camera views to choose each shot.</div><div class="panel-divider"></div><button class="panel-action danger" data-action="scene-delete" ${state.project.scenes.length===1?'disabled':''}>Delete scene</button>`;
     }
     $('#inspector').innerHTML=html;
     const picker=$('.font-picker'),chosen=picker?.querySelector('.active');if(chosen)picker.scrollTop=chosen.offsetTop-picker.offsetTop-picker.clientHeight/2+chosen.clientHeight/2;
@@ -1123,7 +1145,7 @@
   async function sheetData(sheetIndex){
     if(sheetCache.has(sheetIndex))return sheetCache.get(sheetIndex);
     const pending=(async()=>{
-      const sheet=SHEETS[sheetIndex],image=new Image();image.src=`./assets/sheets/${sheet.file}`;await image.decode();
+      const sheet=SHEETS[sheetIndex],image=await loadImage(`./assets/sheets/${sheet.file}`);
       const width=image.naturalWidth,height=image.naturalHeight,canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
       const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);const pixels=ctx.getImageData(0,0,width,height).data;
       if(sheet.cols)return {drawings:separateColoredSheet(pixels,width,height,sheet.cols,sheet.rows)};
@@ -1245,12 +1267,22 @@
     grid.innerHTML=shown.map(libraryButton).join('')+(results.length>shown.length?`<button class="panel-action lib-more" data-lib-more>Show ${Math.min(LIBRARY_PAGE,results.length-shown.length)} more</button>`:'');
     hydrateSheetThumbnails();
   }
+  // Images are awaited with load rather than decode(): browsers hold decode() back while the page is hidden (a background
+  // tab), which would stall start-up and adding drawings.
+  function loadImage(src){return new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=()=>no(new Error('An image did not load'));i.src=src;});}
   function svgImage(svg){return new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=()=>no(new Error('Illustration did not load'));i.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);});}
   // Draws an SVG to a transparent PNG about 480px on its long side, keeping its shape.
   async function rasterizeSvg(svg){
     const image=await svgImage(svg),k=480/Math.max(image.naturalWidth||480,image.naturalHeight||480),w=Math.round((image.naturalWidth||480)*k),h=Math.round((image.naturalHeight||480)*k),M=12;
     const c=document.createElement('canvas');c.width=w+M*2;c.height=h+M*2;c.getContext('2d').drawImage(image,M,M,w,h);
     return {src:c.toDataURL('image/png'),width:c.width,height:c.height};
+  }
+  // Painted library art (storybook/*.webp) already has a transparent background; it is used as a PNG data URL like uploads.
+  async function rasterImage(blob){
+    const url=URL.createObjectURL(blob);
+    try{const image=await new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=()=>no(new Error('Illustration did not load'));i.src=url;});
+      const c=document.createElement('canvas');c.width=image.naturalWidth;c.height=image.naturalHeight;c.getContext('2d').drawImage(image,0,0);return {src:c.toDataURL('image/png'),width:c.width,height:c.height};}
+    finally{URL.revokeObjectURL(url);}
   }
   // Fluent illustrations are flat, without outlines. A dark marker outline around the shape and along strong color
   // edges makes them match the whiteboard art; the marker then traces and colors them like the other drawings.
@@ -1270,12 +1302,13 @@
     og.drawImage(color,0,0);
     return {src:out.toDataURL('image/png'),width:W,height:W};
   }
-  // Adds an illustration from the index. Fluent art gets the marker outline; doodles and backdrops are line art already.
+  // Adds an illustration from the index. Fluent art gets the marker outline; doodles, backdrops and this project's own
+  // drawings (drawn/) are line art already. Wide pieces such as underlines and timelines start wider.
   async function addArtDrawing(file,name){
     try{
       const response=await fetch(`./assets/illustrations/${file}`);if(!response.ok)throw new Error('Illustration did not load');
-      const svg=await response.text(),art=file.startsWith('fluent/')?await outlinedIllustration(svg):await rasterizeSvg(svg),trace=await traceImage(art.src),backdrop=file.startsWith('backdrops/');
-      const w=backdrop?1200:file.startsWith('doodles/')?420:300,h=w*art.height/art.width;
+      const art=/.svg$/i.test(file)?await (async svg=>file.startsWith('fluent/')?outlinedIllustration(svg):rasterizeSvg(svg))(await response.text()):await rasterImage(await response.blob()),trace=await traceImage(art.src),backdrop=file.startsWith('backdrops/');
+      const w=backdrop?1200:file.startsWith('doodles/')||file.startsWith('storybook/')?420:art.width/art.height>1.6?440:300,h=w*art.height/art.width;
       addItem(await withIllustration({...baseItem('image'),label:name||'Illustration',src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,artRef:['art',file],w,h,duration:backdrop?5:2.2},backdrop));
       // A backdrop sits behind everything else in the scene and is drawn first.
       if(backdrop){const items=scene().items,added=items.pop();added.z=Math.min(0,...items.map(x=>num(x.z)))-1;items.unshift(added);changed();toast(`${name} backdrop added behind the scene and drawn first.`);}else toast(`${name||'Illustration'} added to the canvas.`);
@@ -1600,8 +1633,19 @@
   // reaches that pixel. Times spread out from the pen path through the letter's own ink, so a pixel is uncovered only
   // once the pen passes the part of the letter it belongs to, never across a gap or from a neighbouring letter.
   // Pixels must line up with the full text image: ctx maps (u,v) to canvas pixels (u*fit*ratio, v*ratio).
+  // A letter's image and time map depend only on the letter, its font, color and scale and where it falls within a pixel,
+  // so they are kept and reused: retyping text only traces letters it has not seen in that place before.
+  const letterCache=new Map();
   function letterReveal(char,font,color,left,top,size,advance,fit,ratio,canvas,paths){
-    const ox=Math.floor((left-size*.6)*fit*ratio),oy=Math.floor((top-size*.5)*ratio);
+    const fx=(left-size*.6)*fit*ratio,fy=(top-size*.5)*ratio,ox=Math.floor(fx),oy=Math.floor(fy);
+    const key=[char,font,color,size,fit.toFixed(4),ratio.toFixed(4),Math.round((fx-ox)*8),Math.round((fy-oy)*8),paths.map(p=>p.d.length).join()].join('|'),hit=letterCache.get(key);
+    if(hit!==undefined)return hit&&{box:[(ox+hit.x0)/canvas.width,(oy+hit.y0)/canvas.height,hit.W/canvas.width,hit.H/canvas.height],src:hit.src,map:hit.map};
+    const made=traceLetterReveal(char,font,color,left,top,size,advance,fit,ratio,canvas,paths,ox,oy);
+    if(letterCache.size>4000)letterCache.clear();
+    letterCache.set(key,made&&{x0:made.x0,y0:made.y0,W:made.W,H:made.H,src:made.src,map:made.map});
+    return made&&{box:made.box,src:made.src,map:made.map};
+  }
+  function traceLetterReveal(char,font,color,left,top,size,advance,fit,ratio,canvas,paths,ox,oy){
     const AW=Math.ceil((advance+size*1.2)*fit*ratio)+2,AH=Math.ceil(size*2.1*ratio)+2,area=document.createElement('canvas');area.width=AW;area.height=AH;
     const ac=area.getContext('2d',{willReadFrequently:true});ac.setTransform(ratio*fit,0,0,ratio,-ox,-oy);
     ac.font=font;ac.textBaseline='top';ac.fillStyle=color;ac.fillText(char,left,top);
@@ -1654,7 +1698,7 @@
     const map=document.createElement('canvas');map.width=W;map.height=H;const mc=map.getContext('2d'),data=mc.createImageData(W,H);
     for(let i=0;i<N;i++)if(near[i]){data.data[i*4]=data.data[i*4+1]=data.data[i*4+2]=255;data.data[i*4+3]=Math.round(255-clamp(time[i],0,1)*250);}
     mc.putImageData(data,0,0);
-    return {box:[bx/canvas.width,by/canvas.height,W/canvas.width,H/canvas.height],src:letter.toDataURL('image/png'),map:map.toDataURL('image/png')};
+    return {box:[bx/canvas.width,by/canvas.height,W/canvas.width,H/canvas.height],src:letter.toDataURL('image/png'),map:map.toDataURL('image/png'),x0,y0,W,H};
   }
   async function refreshHandwriting(it){
     if(!HANDWRITING_FONTS[it.font])return;
@@ -1670,8 +1714,11 @@
       const connected=CONNECTED_FONTS.has(it.font),widths=rows.map(row=>ctx.measureText(row).width),fit=Math.min(1,(it.w-8)/Math.max(1,...widths)),room=(it.w-8)/fit;
       ctx.scale(fit,1);const letterPaths=[],letters=[];
       // Each letter starts where the text before it ends (with the font's kerning), so connected scripts join up.
-      rows.forEach((row,line)=>{const start=4/fit+(room-widths[line])*(ALIGN_SHIFT[it.align]||0),top=2+line*size*1.16;let before='';
+      // Tracing yields to the browser every few milliseconds so typing stays smooth, and stops if the text changes again.
+      let slice=performance.now();
+      for(const [line,row] of rows.entries()){const start=4/fit+(room-widths[line])*(ALIGN_SHIFT[it.align]||0),top=2+line*size*1.16;let before='';
         for(const char of row){
+          if(performance.now()-slice>12){await new Promise(r=>setTimeout(r));if(textSignature(it)!==signature)return;slice=performance.now();}
           const left=start+ctx.measureText(before).width,advance=ctx.measureText(char).width;before+=char;
           if(/\s/u.test(char))continue;
           ctx.fillText(char,left,top);
@@ -1680,7 +1727,7 @@
           const reveal=letterReveal(char,font,color,left,top,size,advance,fit,ratio,canvas,paths);
           if(reveal){letters.push(reveal);letterPaths.push(...paths);}
         }
-      });
+      }
       const src=canvas.toDataURL('image/png');
       if(textSignature(it)!==signature||!state.project.scenes.some(s=>s.items.includes(it)))return;
       it.handwritingSrc=src;it.handwritingSignature=signature;it.letterPaths=letterPaths;it.letters=letters;it.tracePaths=[];it.fillPaths=[];it.transparentArtwork=true;changed(false);
@@ -1689,7 +1736,7 @@
   function scheduleHandwriting(it){
     clearTimeout(textTimers.get(it.id));
     if(!HANDWRITING_FONTS[it.font])return;
-    textTimers.set(it.id,setTimeout(()=>{textTimers.delete(it.id);refreshHandwriting(it);},100));
+    textTimers.set(it.id,setTimeout(()=>{textTimers.delete(it.id);refreshHandwriting(it);},250));
   }
   function addShape(shape){addItem({...baseItem('shape'),shape,fill:'#cde9df',w:350,h:225});}
   function addText(){const it={...baseItem('text'),text:'Your message here',x:470,y:350,w:850,h:130,fontSize:72,color:'#213b4b',font:'patrick'};addItem(it);scheduleHandwriting(it);}
@@ -1996,7 +2043,7 @@
     return strokes;
   }
   async function planIllustration(src){
-    const image=new Image();image.src=src;await image.decode();
+    const image=await loadImage(src);
     const M=2,k=ILLUSTRATION_SIZE/Math.max(image.naturalWidth,image.naturalHeight),w=Math.max(4,Math.round(image.naturalWidth*k)),h=Math.max(4,Math.round(image.naturalHeight*k)),W=w+M*2,H=h+M*2,N=W*H;
     const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,M,M,w,h);
     const px=ctx.getImageData(0,0,W,H).data,opaque=new Uint8Array(N),ink=new Uint8Array(N);let inkCount=0;
@@ -2082,7 +2129,7 @@
     try{return {...fields,illustration:await planIllustration(fields.src),duration:Math.max(num(fields.duration,2.2),3.2)};}catch(e){console.error('Could not plan the illustration',e);return fields;}
   }
   async function traceImage(src){
-    const image=new Image();image.src=src;await image.decode();
+    const image=await loadImage(src);
     const size=96,canvas=document.createElement('canvas');canvas.width=canvas.height=size;
     const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.clearRect(0,0,size,size);
     ctx.drawImage(image,0,0,size,size);const pixels=ctx.getImageData(0,0,size,size).data;
@@ -2160,15 +2207,30 @@
     if(key==='sceneName')target.name=value.slice(0,80)||'Scene';
     else if(key==='rotation')target.rotation=((num(value,0)+180)%360+360)%360-180;
     else if(key==='delay')target.delay=clamp(num(value,0),0,60);
+    else if(key==='effectSpeed')target.effectSpeed=clamp(num(value,EFFECT_SPEED[target.effect]||1.5),.2,20);
+    else if(key==='effectStrength')target.effectStrength=clamp(num(value,.5),0,1);
+    else if(key==='effect'){snapshot();target.effect=value;changed(false);renderInspector();return;}
     else if(['x','y','w','h','fontSize','duration','pause','zoom','cx','cy'].includes(key)){
       const n=num(value,target[key]);target[key]=key==='duration'?clamp(n,.1,60):key==='pause'?clamp(n,0,60):key==='zoom'?clamp(n,.2,5):key==='w'||key==='h'?clamp(n,10,30000):key==='fontSize'?clamp(n,16,180):n;
     }else target[key]=value;
     if(it?.type==='text'&&['text','font','fontSize','color','w','h'].includes(key))scheduleHandwriting(it);
     changed(false);
   }
+  function deleteScene(index){
+    const scenes=state.project.scenes,s=scenes[index];if(!s||scenes.length===1)return;
+    snapshot();scenes.splice(index,1);
+    const clips=audioClips();for(const old of clips.filter(c=>c.scene===s.id)){clips.splice(clips.indexOf(old),1);if(!clips.some(c=>c.file===old.file))delete state.project.audioFiles[old.file];}
+    if(index<state.sceneIndex||state.sceneIndex>=scenes.length)state.sceneIndex=Math.max(0,state.sceneIndex-1);
+    state.selected=null;state.time=sceneStart(state.sceneIndex);changed();toast(`Deleted “${s.name}”. Press Ctrl+Z to undo.`);
+  }
+  // Opens the current scene's settings and puts the cursor in its script box.
+  function openScript(){
+    stopPreview();state.tool='select';state.selected=null;state.multi=[];state.selectedClip=null;renderAll();
+    const box=$('#inspector [data-scene-script]');if(box){box.scrollIntoView({block:'center',behavior:'smooth'});box.focus();}
+  }
   function action(name){
     const it=item(),items=scene().items;
-    if(name==='scene-delete'){if(state.project.scenes.length===1)return;snapshot();state.project.scenes.splice(state.sceneIndex,1);state.sceneIndex=Math.max(0,state.sceneIndex-1);state.selected=null;state.time=sceneStart(state.sceneIndex);changed();return;}
+    if(name==='scene-delete'){deleteScene(state.sceneIndex);return;}
     if(name==='preview-camera'){previewCamera();return;}
     if(name==='narrate'){stopPreviewVoice();narrateScene(scene());return;}
     if(name==='preview-script'){const text=String(scene().script||'').trim();if(text)previewVoice(text,'script');else toast('Write a script for this scene first.');return;}
@@ -2260,7 +2322,7 @@
     bindTimeline();bindAudio();bindEditing();bindArrange();
     $('#projectName').addEventListener('focus',()=>snapshot());$('#projectName').addEventListener('input',e=>{state.project.name=e.target.value.slice(0,80);changed(false);});
     $('#addSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();state.project.scenes.push({id:id(),name:`Scene ${state.project.scenes.length+1}`,background:'#ffffff',items:[]});state.sceneIndex=state.project.scenes.length-1;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
-    $('#duplicateSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();const copy=clone(scene());copy.id=id();copy.name+=` copy`;copy.items.forEach(x=>x.id=id());state.project.scenes.splice(state.sceneIndex+1,0,copy);state.sceneIndex++;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
+    $('#sceneScriptBtn').addEventListener('click',openScript);$('#duplicateSceneBtn').addEventListener('click',()=>{stopPreview();snapshot();const copy=clone(scene());copy.id=id();copy.name+=` copy`;copy.items.forEach(x=>x.id=id());state.project.scenes.splice(state.sceneIndex+1,0,copy);state.sceneIndex++;state.selected=null;state.time=sceneStart(state.sceneIndex);changed();});
     $('#playBtn').addEventListener('click',play);$('#previewBtn').addEventListener('click',()=>{if(state.playing)pause();else play();});$('#restartBtn').addEventListener('click',()=>seek(0));$('#stopBtn').addEventListener('click',stop);$('#topStopBtn').addEventListener('click',stop);$('#fitBtn').addEventListener('click',fitContent);$('#snapBtn').addEventListener('click',e=>{stageSnap=!stageSnap;e.currentTarget.classList.toggle('active',stageSnap);toast(stageSnap?'Snapping on. Hold Alt while dragging to move freely.':'Snapping off.');});$('#zoomInBtn').addEventListener('click',()=>zoomEditor(.8));$('#zoomOutBtn').addEventListener('click',()=>zoomEditor(1.25));
     $('#scrubber').addEventListener('input',e=>seek(+e.target.value/1000*totalLen()));$('#exportBtn').addEventListener('click',showExportOptions);$('#projectsBtn').addEventListener('click',showProjects);$('#backupStatus').addEventListener('click',()=>{if(backup.folder&&backup.permission!=='granted')reconnectBackupFolder();else showProjects();});
     $('#uploadInput').addEventListener('change',async e=>{await uploadImage(e.target.files[0]);e.target.value='';});$('#audioInput').addEventListener('change',async e=>{await uploadAudio(e.target.files[0],state.audioLane??0);e.target.value='';});$('#projectBackupInput').addEventListener('change',async e=>{await importProjectBackup(e.target.files[0]);e.target.value='';});
@@ -2278,7 +2340,7 @@
   }
   async function init(){try{
     const fontResponse=await fetch('./assets/stroke-font.json');if(!fontResponse.ok)throw new Error('Writing font did not load');state.fonts=await fontResponse.json();
-    const hand=new Image();hand.src=HAND.src;await hand.decode();state.handImage=hand;
+    state.handImage=await loadImage(HAND.src);
     state.db=await openDb();
     // Ask the browser to keep this site's storage through automatic clean-ups.
     try{await navigator.storage?.persist?.();}catch{}

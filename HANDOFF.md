@@ -42,6 +42,22 @@ The per-letter images and maps (`it.letters`) are rebuilt from the text when a p
 
 The earlier private hosted site is [Whiteboard Studio](https://whiteboard-studio-jesse-2026.jessenorthup25.chatgpt.site/). Its Sites project ID is in `.openai/hosting.json`, and its last published source commit was `574274090b7342fc12ea34d9b261352fb6cf3e9e`. That site is not updated by this repository; the GitHub Pages site above is the current one. No deployment credential is stored in this folder.
 
+## Storybook illustrations
+
+**120 painted storybook illustrations** fill ten library categories: Bible people (Old Testament, New Testament, heroes and leaders, everyday life), Scripture and symbols (including a closed Holy Bible, an open Bible and a glowing Bible), Bible stories (Old and New Testament), Armor of God and parables, Callouts and Charts. They were generated in ChatGPT from the prompts in `artwork/storybook-prompts.md` as 4 × 3 sheets on transparent backgrounds; the sheets are in `artwork/storybook/`, with names and search words in `artwork/storybook/storybook.json`. `tools/cut-storybook.cjs` (needs `npm install --no-save sharp@0.33.5`) cuts each sheet into transparent WebP files in `dist/assets/illustrations/storybook/` and replaces their entries in `illustrations/index.json`. Neighbouring drawings on a sheet can touch through faint edge or glow pixels, so each cell is decided by its drawing's solid core (alpha ≥ 240, at least 1,500 pixels) and the faint pixels go to the nearest core they connect to. To add a sheet: save it in `artwork/storybook/`, add it to `storybook.json` and run the tool. Saved projects refer to these files by name (`artRef`), so keep the names stable. `addArtDrawing` loads WebP and PNG art with `rasterImage` (SVG art is rasterized as before) and adds storybook art 420 wide.
+
+## Scenes and scripts
+
+Each scene tile has a × (shown on hover and on the active scene) that deletes the scene with its linked narration clips (`deleteScene`; undo restores both); the last scene cannot be deleted. **✎ Script** in the timeline header (`openScript`) opens the current scene's settings and puts the cursor in its script box. The Wide/Square/Tall video format (`formatField`) is offered on camera moves as well as in scene settings.
+
+## Effects
+
+Drawings, text and shapes can have a looping **effect after drawing** (`item.effect`: `pulse`, `spin`, `rock` or `glow`, with `effectSpeed` in seconds per cycle, `effectStrength` 0–1, `effectColor` for glow and `effectReverse` for counter-clockwise spin). It starts when the item finishes drawing and runs until its scene ends. `visualAt` reports each item's time since it finished (`since`) and `effectMarkup` wraps the item's markup in a transform, or adds a blurred colored copy behind it for glow, so effects show in Preview and in exports. The editor itself shows items still.
+
+## Typing performance
+
+Smooth handwriting fonts are traced per letter. `letterReveal` caches each letter's image and time map (keyed by letter, font, color, scale and sub-pixel position), so editing text only traces new letters; `refreshHandwriting` yields to the browser every 12 ms and stops if the text changes again, and starts 250 ms after the last keystroke. This took typing from about a 1.1 s freeze per key to under 0.1 s. Images are awaited with `loadImage` (the `load` event) rather than `decode()`, which browsers hold back in hidden tabs; that had stalled start-up and adding drawings in a background tab.
+
 ## Illustration drawing
 
 Artwork with a transparent background (library drawings, color illustrations, PNG and SVG uploads) is drawn like an illustrator would: `planIllustration` analyses the image at 256px, finds the dark line work (luminance below 62, or the shape's edge when there is none), thins it to centerlines and orders the line strokes so each starts near where the pen is. It then splits the rest into color areas (merging small shading patches into the largest neighbouring area) and colors each with back-and-forth marker strokes at a slight angle, biggest areas first. Every pixel gets the moment a marker as wide as the line, or the coloring band, first covers it; the time map (`illustration.map`) and pen path (`illustration.pen`) are saved with the item, and `illustrationMarkup` reveals the image through the thresholded map while the hand follows the path. Older projects are planned once when opened (`ILLUSTRATION_VERSION`). Photos without transparency keep the generic contour-and-scanline tracing.

@@ -67,6 +67,10 @@ const round = (s, places) => s.replace(/-?\d*\.\d+/g, n => String(+(+n).toFixed(
     fs.copyFileSync(path.join(drawn, file), path.join(backdrops, file));
     index.push([`backdrops/${file}`, name, 'Backdrops', `backdrop background scene set ${words}`, 0]);
   }
+  // The storybook drawings cut by tools/cut-storybook.cjs (dist/assets/illustrations/storybook/) are kept as they are.
+  const storybook = JSON.parse(fs.readFileSync(path.join(base, 'index.json'), 'utf8')).items.filter(i => i[0].startsWith('storybook/'));
+  index.push(...storybook);
+  for (const g of storybook.map(i => i[2])) if (!groupOrder.includes(g)) groupOrder.splice(groupOrder.indexOf('Sketch people'), 0, g);
   index.sort((a, b) => groupOrder.indexOf(a[2]) - groupOrder.indexOf(b[2]) || a[1].localeCompare(b[1]));
   fs.writeFileSync(path.join(base, 'index.json'), JSON.stringify({ sources: ['microsoft/fluentui-emoji (Flat, MIT)', 'Open Doodles by Pablo Stanley (CC0)'], tones, groups: groupOrder.filter(g => index.some(i => i[2] === g)), items: index }));
   fs.copyFileSync(path.join(src, 'fluent-LICENSE'), path.join(dir, 'LICENSE'));
