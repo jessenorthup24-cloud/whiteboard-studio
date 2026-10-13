@@ -60,7 +60,14 @@ The drawing hand has a size (`handSize`, 30–400% of normal) and a tilt about i
 
 ## My uploads
 
-**Upload to my library** (top of Drawings) saves the person's own pictures, illustrations and icons (PNG, JPEG, WebP or SVG, several at once) in this browser's database (IndexedDB store `library`, added in database version 3) and lists them under **My uploads**, ready for any project. Each file can be one drawing or a sheet to cut up by columns and rows (`cutSheetCells`, the same core-seeded split as `tools/cut-storybook.cjs`), and a plain white background touching the edges can be removed (`clearWhite`, which also softens the edge). Pieces are trimmed and stored as WebP (PNG where the browser cannot encode WebP), at most 720 px on the long side. Placed drawings carry their image inside the project, so removing an upload (the × on its tile) never breaks a project. **Download backup** includes the library (`library` in the backup file) and **Import backup** adds any drawings that are missing.
+**Upload to my library** (top of Drawings) adds the person's own pictures, illustrations and icons (PNG, JPEG, WebP or SVG, several at once) to **My uploads**. Each file can be one drawing or a sheet to cut up by columns and rows (`cutSheetCells`, the same core-seeded split as `tools/cut-storybook.cjs`), and a plain white background touching the edges can be removed (`clearWhite`). Pieces are trimmed and stored as WebP (PNG where the browser cannot encode WebP), at most 720 px on the long side.
+
+Uploads go to one of two places:
+
+- **Site catalog (every device)**, the default: `ghCommit` makes one commit to `main` through the GitHub API, adding the images to `dist/assets/illustrations/uploads/` and listing them in `uploads/catalog.json` (`[{file, name, width, height, added}]`). Pushing to `main` redeploys the site, so every browser has them about a minute later. It needs a fine-grained GitHub token limited to this repository with Contents: Read and write; the person pastes it once per browser and it is kept only in that browser's localStorage (`whiteboard-github-token`; Disconnect removes it). The token is never in the repository. The uploading browser also keeps a copy in IndexedDB, so the drawings work at once. Removing a shared upload commits its removal. Because the app commits to `main`, run `git pull` before working locally.
+- **This browser only**: IndexedDB store `library` (database version 3).
+
+`loadMine` merges the site catalog (fetched without cache) with this browser's uploads. Placed drawings carry their image inside the project, so removing an upload never breaks a project. **Download backup** includes this browser's uploads (`library` in the backup file) and **Import backup** adds any that are missing.
 
 ## Boards
 

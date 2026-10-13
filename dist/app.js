@@ -1289,7 +1289,7 @@
       const basics=iconKeys.map(k=>({kind:'basic',key:k,name:ICONS[k].name,category:'Hand-drawn basics',words:''}));
       return basics.concat((library.icons?.icons||[]).map(([name,cat,words],i)=>({kind:'tabler',i,name:name.replace(/-/g,' '),category:library.icons.categories[cat],words})));
     }
-    const mine=(library.mine||[]).map(m=>({kind:'mine',id:m.id,name:m.name,category:MINE_CATEGORY,words:'my upload uploaded own',src:m.src}));
+    const mine=(library.mine||[]).map(m=>({kind:'mine',id:m.id,name:m.name,category:MINE_CATEGORY,words:'my upload uploaded own',src:mineSrc(m)}));
     const sheets=SHEETS.flatMap((sheet,si)=>sheet.items.map((name,ii)=>({kind:'sheet',si,ii,name,category:sheet.name,words:''})));
     return mine.concat(sheets).concat((library.art?.items||[]).map(([path,name,group,words,toned])=>({kind:'art',path,name,category:group,words,toned})));
   }
@@ -1369,12 +1369,57 @@
   }
   // Adds an illustration from the index. Fluent art gets the marker outline; doodles, backdrops and this project's own
   // drawings (drawn/) are line art already. Wide pieces such as underlines and timelines start wider.
-  // My uploads: the person's own pictures, illustrations and icons, kept in this browser's database (the "library"
-  // store) so they can be reused in every project. A file can be one drawing, or a sheet of drawings in a grid that is
-  // cut into separate drawings like the storybook sheets. Download backup carries them along with the projects.
+  // My uploads: the person's own pictures, illustrations and icons. Shared uploads are committed to the site's GitHub
+  // repository (dist/assets/illustrations/uploads/, listed in catalog.json), so after the site redeploys every browser
+  // and device has them; that needs a GitHub token with write access to the repository's contents, kept only in this
+  // browser. Uploads can instead stay in this browser's database (the "library" store). The uploading browser also keeps
+  // its own copy of shared uploads, so they are usable at once, before the redeploy. A file can be one drawing, or a
+  // sheet of drawings in a grid that is cut into separate drawings like the storybook sheets.
   const MINE_CATEGORY='My uploads',MINE_SIDE=720;
+  const GH={owner:'jessenorthup24-cloud',repo:'whiteboard-studio',branch:'main',dir:'dist/assets/illustrations/uploads'};
+  const GH_TOKEN_KEY='whiteboard-github-token';
+  const ghToken=()=>{try{return localStorage.getItem(GH_TOKEN_KEY)||'';}catch{return '';}};
   function mineTask(mode,fn){return new Promise((resolve,reject)=>{const tx=state.db.transaction('library',mode),req=fn(tx.objectStore('library'));req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
-  async function loadMine(){try{library.mine=(await mineTask('readonly',s=>s.getAll())).sort((a,b)=>a.added-b.added);}catch(e){console.error(e);library.mine=[];}}
+  async function gh(path,{method='GET',body,token=ghToken(),allow404=false}={}){
+    const r=await fetch(`https://api.github.com/repos/${GH.owner}/${GH.repo}${path}`,{method,cache:'no-store',headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',Authorization:`Bearer ${token}`,...(body?{'Content-Type':'application/json'}:{})},body:body&&JSON.stringify(body)});
+    if(r.status===404&&allow404)return null;
+    if(!r.ok){const e=new Error(r.status===401?'GitHub did not accept the token':r.status===403?'The token is not allowed to change the site repository':r.status===404?'The token cannot reach the site repository':`GitHub answered ${r.status}`);e.status=r.status;throw e;}
+    return r.status===204?null:r.json();
+  }
+  // Checks a token can write to the repository, then remembers it in this browser.
+  async function connectGitHub(token){
+    const repo=await gh('',{token});if(!repo?.permissions?.push)throw new Error('The token can read the site repository but not change it. Give it Contents: Read and write.');
+    try{localStorage.setItem(GH_TOKEN_KEY,token);}catch{throw new Error('This browser could not store the token.');}
+  }
+  // One commit to the main branch: adds and removes upload files and edits the catalog. Retries if the branch moved.
+  async function ghCommit(message,{add=[],remove=[]},edit){
+    for(let attempt=0;;attempt++){
+      const head=(await gh(`/git/ref/heads/${GH.branch}`)).object.sha,commit=await gh(`/git/commits/${head}`);
+      const current=await gh(`/contents/${GH.dir}/catalog.json?ref=${head}`,{allow404:true});
+      let catalog=[];if(current?.content){const bytes=Uint8Array.from(atob(current.content.replace(/\s/g,'')),c=>c.charCodeAt(0));try{catalog=JSON.parse(new TextDecoder().decode(bytes));}catch{catalog=[];}}
+      catalog=edit(Array.isArray(catalog)?catalog:[]);
+      const tree=[];
+      for(const f of add){const blob=await gh('/git/blobs',{method:'POST',body:{content:f.base64,encoding:'base64'}});tree.push({path:`${GH.dir}/${f.name}`,mode:'100644',type:'blob',sha:blob.sha});}
+      for(const name of remove)tree.push({path:`${GH.dir}/${name}`,mode:'100644',type:'blob',sha:null});
+      tree.push({path:`${GH.dir}/catalog.json`,mode:'100644',type:'blob',content:JSON.stringify(catalog,null,1)+'\n'});
+      const made=await gh('/git/trees',{method:'POST',body:{base_tree:commit.tree.sha,tree}}),next=await gh('/git/commits',{method:'POST',body:{message,tree:made.sha,parents:[head]}});
+      try{await gh(`/git/refs/heads/${GH.branch}`,{method:'PATCH',body:{sha:next.sha}});return catalog;}
+      catch(e){if(attempt<2&&(e.status===409||e.status===422))continue;throw e;}
+    }
+  }
+  // The list: the shared catalog (fetched fresh) and this browser's uploads, with local copies of shared ones merged in.
+  async function loadMine(){
+    let local=[],shared=[];
+    try{local=await mineTask('readonly',s=>s.getAll());}catch(e){console.error(e);}
+    try{const r=await fetch(`./assets/illustrations/uploads/catalog.json?v=${Date.now()}`,{cache:'no-store'});if(r.ok)shared=await r.json();}catch{}
+    const byFile=new Map(local.filter(m=>m.file).map(m=>[m.file,m]));
+    const list=(Array.isArray(shared)?shared:[]).filter(c=>c&&typeof c.file==='string'&&!removedShared.has(c.file)&&/^[\w.-]+\.(webp|png)$/.test(c.file)).map(c=>{const mine=byFile.get(c.file);byFile.delete(c.file);return {id:mine?.id||`shared:${c.file}`,name:String(c.name||'Drawing'),file:c.file,src:mine?.src,width:num(c.width,400),height:num(c.height,400),added:num(c.added,0),shared:true};});
+    for(const m of local)if(!m.file||(byFile.has(m.file)&&!removedShared.has(m.file)))list.push({...m,shared:!!m.file});
+    library.mine=list.sort((a,b)=>a.added-b.added);
+  }
+  // Removed shared uploads stay listed in the site's catalog until it redeploys; this browser hides them meanwhile.
+  const removedShared=new Set();
+  const mineSrc=m=>m.src||`./assets/illustrations/uploads/${m.file}`;
   // Reads an image file onto a canvas, at most 2400px on its long side.
   async function fileCanvas(file){
     const url=URL.createObjectURL(file);
@@ -1429,55 +1474,70 @@
     const webp=c.toDataURL('image/webp',.9);
     return {src:webp.startsWith('data:image/webp')?webp:c.toDataURL('image/png'),width:c.width,height:c.height};
   }
+  const mineSlug=s=>String(s).toLowerCase().replace(/['’]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40)||'drawing';
   function chooseMineUploads(files){
     files=[...files].filter(f=>/^image\/(png|jpeg|webp|svg\+xml)$/.test(f.type));if(!files.length){toast('Choose PNG, JPEG, WebP or SVG images.');return;}
-    const one=files.length===1;
+    const one=files.length===1;let kind='single',dest='shared';
+    const tokenHelp=`<div class="field mine-token"><label>GitHub token</label><input id="mineToken" type="password" autocomplete="off" placeholder="github_pat_…"><p class="panel-help">Needed once in this browser. On GitHub, open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Settings → Fine-grained tokens → Generate new token</a>, choose <b>Only select repositories → ${GH.repo}</b> and give <b>Contents: Read and write</b>. The token stays in this browser only.</p></div>`;
     modal(`<div class="modal-top"><h2>Add to my library</h2><button class="close-button" data-mine-cancel>×</button></div>
-      <p class="panel-help">${one?esc(files[0].name):`${files.length} images`} will be saved in this browser and listed under “${MINE_CATEGORY}” in Drawings, ready for any project.</p>
+      <p class="panel-help">${one?esc(files[0].name):`${files.length} images`} will be listed under “${MINE_CATEGORY}” in Drawings, ready for any project.</p>
+      <div class="field"><label>Save to</label><div class="segmented"><button data-mine-dest="shared" class="active">Site catalog (every device)</button><button data-mine-dest="local">This browser only</button></div></div>
+      <div class="mine-shared">${ghToken()?`<p class="panel-help">Connected to GitHub. New uploads appear on other devices about a minute after saving. <a href="#" data-mine-disconnect>Disconnect</a></p>`:tokenHelp}</div>
       <div class="field"><label>Each image is</label><div class="segmented"><button data-mine-kind="single" class="active">One drawing</button><button data-mine-kind="sheet">A sheet to cut up</button></div></div>
       <div class="field-row mine-grid hidden"><div class="field"><label>Columns</label><input id="mineCols" type="number" min="1" max="10" value="4"></div><div class="field"><label>Rows</label><input id="mineRows" type="number" min="1" max="10" value="3"></div></div>
       ${one?`<div class="field"><label>Name</label><input id="mineName" type="text" value="${esc(files[0].name.replace(/\.[^.]+$/,'').replace(/[-_]+/g,' '))}"></div>`:''}
       <label class="check-row"><input id="mineWhite" type="checkbox" checked> Remove a plain white background</label>
       <p id="mineStatus" class="panel-help"></p>
       <div class="modal-foot"><button class="button ghost" data-mine-cancel>Cancel</button><button class="button primary" data-mine-save>Add to library</button></div>`);
-    let kind='single';
     $('#modal').onclick=async e=>{
-      const k=e.target.closest('[data-mine-kind]');
+      const k=e.target.closest('[data-mine-kind]'),d=e.target.closest('[data-mine-dest]');
       if(k){kind=k.dataset.mineKind;document.querySelectorAll('#modal [data-mine-kind]').forEach(b=>b.classList.toggle('active',b===k));$('#modal .mine-grid').classList.toggle('hidden',kind!=='sheet');return;}
+      if(d){dest=d.dataset.mineDest;document.querySelectorAll('#modal [data-mine-dest]').forEach(b=>b.classList.toggle('active',b===d));$('#modal .mine-shared').classList.toggle('hidden',dest!=='shared');return;}
+      if(e.target.closest('[data-mine-disconnect]')){e.preventDefault();try{localStorage.removeItem(GH_TOKEN_KEY);}catch{}$('#modal .mine-shared').innerHTML=tokenHelp;return;}
       if(e.target.closest('[data-mine-cancel]')){$('#modal').onclick=null;closeModal();return;}
       if(!e.target.closest('[data-mine-save]'))return;
-      const button=e.target.closest('[data-mine-save]');button.disabled=true;
+      const button=e.target.closest('[data-mine-save]'),status=$('#mineStatus');button.disabled=true;
       const cols=clamp(Math.round(num($('#mineCols').value,4)),1,10),rows=clamp(Math.round(num($('#mineRows').value,3)),1,10),white=$('#mineWhite').checked,baseName=one?($('#mineName').value.trim()||'My drawing'):'';
-      let added=0;
       try{
+        if(dest==='shared'&&!ghToken()){const token=$('#mineToken')?.value.trim();if(!token)throw new Error('Paste a GitHub token, or choose This browser only.');status.textContent='Checking the token…';await connectGitHub(token);}
+        const made=[];
         for(const [fi,file] of files.entries()){
-          $('#mineStatus').textContent=`Preparing ${file.name}… (${fi+1} of ${files.length})`;await new Promise(r=>setTimeout(r,30));
+          status.textContent=`Preparing ${file.name}… (${fi+1} of ${files.length})`;await new Promise(r=>setTimeout(r,30));
           const canvas=await fileCanvas(file),g=canvas.getContext('2d',{willReadFrequently:true}),data=g.getImageData(0,0,canvas.width,canvas.height);
           if(white&&!hasTransparency(data))clearWhite(data,canvas.width,canvas.height);
           const pieces=kind==='sheet'?cutSheetCells(data,canvas.width,canvas.height,cols,rows):[data];
           const name=baseName||file.name.replace(/\.[^.]+$/,'').replace(/[-_]+/g,' ');
-          for(const [pi,piece] of pieces.entries()){
-            const img=pieceImage(piece);if(!img)continue;
-            await mineTask('readwrite',s=>s.put({id:id(),name:pieces.length>1?`${name} ${pi+1}`:name,...img,added:Date.now()+added}));added++;
-          }
+          for(const [pi,piece] of pieces.entries()){const img=pieceImage(piece);if(img)made.push({id:id(),name:(pieces.length>1?`${name} ${pi+1}`:name).slice(0,80),...img,added:Date.now()+made.length});}
         }
+        if(!made.length)throw new Error('Nothing was found in that image.');
+        if(dest==='shared'){
+          for(const m of made)m.file=`${mineSlug(m.name)}-${m.id.slice(-6)}.${m.src.startsWith('data:image/webp')?'webp':'png'}`;
+          status.textContent=`Saving ${made.length} drawing${made.length===1?'':'s'} to the site catalog…`;
+          await ghCommit(`Add ${made.length===1?`“${made[0].name}”`:`${made.length} drawings`} to the uploads catalog`,{add:made.map(m=>({name:m.file,base64:m.src.split(',')[1]}))},catalog=>catalog.concat(made.map(m=>({file:m.file,name:m.name,width:m.width,height:m.height,added:m.added}))));
+        }
+        for(const m of made)await mineTask('readwrite',s=>s.put(m));
         await loadMine();$('#modal').onclick=null;closeModal();
         library.tab='art';library.category=MINE_CATEGORY;library.query='';library.limit=LIBRARY_PAGE;state.tool='icon';state.selected=null;renderAll();
-        toast(added?`${added} drawing${added===1?'':'s'} added to ${MINE_CATEGORY}.`:'Nothing was found in that image.');
-      }catch(err){console.error(err);button.disabled=false;$('#mineStatus').textContent='Could not read that image. Try a PNG, JPEG, WebP or SVG file.';}
+        toast(`${made.length} drawing${made.length===1?'':'s'} added to ${MINE_CATEGORY}${dest==='shared'?'. Other devices will see them in about a minute.':' in this browser.'}`);
+      }catch(err){console.error(err);button.disabled=false;status.textContent=err.message||'Could not read that image. Try a PNG, JPEG, WebP or SVG file.';}
     };
   }
   async function addMineDrawing(mineId){
     const entry=library.mine?.find(m=>m.id===mineId);if(!entry)return;
-    try{const trace=await traceImage(entry.src),w=420,h=w*entry.height/entry.width;
-      addItem(await withIllustration({...baseItem('image'),label:entry.name,src:entry.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,x:800-w/2,y:450-h/2,w,h,duration:2.2}));
+    try{const src=entry.src||(await rasterImage(await (await fetch(mineSrc(entry))).blob())).src,trace=await traceImage(src),w=420,h=w*entry.height/entry.width;
+      addItem(await withIllustration({...baseItem('image'),label:entry.name,src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,x:800-w/2,y:450-h/2,w,h,duration:2.2}));
       toast(`${entry.name} added to the canvas.`);}
     catch(e){console.error(e);toast('Could not add that drawing.');}
   }
   async function deleteMine(mineId){
     const entry=library.mine?.find(m=>m.id===mineId);if(!entry)return;
-    if(!confirm(`Remove “${entry.name}” from your library? Drawings already placed in projects stay where they are.`))return;
-    await mineTask('readwrite',s=>s.delete(mineId));await loadMine();showLibraryResults();toast(`${entry.name} removed from your library.`);
+    if(entry.shared&&!ghToken()){toast('Connect GitHub (Upload to my library) to remove drawings from the site catalog.');return;}
+    if(!confirm(`Remove “${entry.name}” from ${entry.shared?'the site catalog on every device':'your library'}? Drawings already placed in projects stay where they are.`))return;
+    try{
+      if(entry.shared){removedShared.add(entry.file);await ghCommit(`Remove “${entry.name}” from the uploads catalog`,{remove:[entry.file]},catalog=>catalog.filter(c=>c.file!==entry.file));}
+      if(!entry.id.startsWith('shared:'))await mineTask('readwrite',s=>s.delete(entry.id));
+      await loadMine();showLibraryResults();toast(`${entry.name} removed${entry.shared?' from the site catalog':' from your library'}.`);
+    }catch(e){console.error(e);removedShared.delete(entry.file);toast(`Could not remove it: ${e.message}`);}
   }
   async function addArtDrawing(file,name){
     try{
