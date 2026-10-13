@@ -392,9 +392,54 @@
     }
     return start+maskedDrawing(it,body,progress,hand&&progress<1)+hit+end;
   }
+  // Boards: the surface a scene is drawn on (scene.board). Plain uses the scene's background color. The dirty whiteboard
+  // is a texture of faint smudges and half-erased marker, painted once on a canvas; the yellow notepad is ruled lines
+  // with a red margin. Both are tiled in whiteboard space, so they pan and zoom with the camera like a real surface.
+  const BOARDS=[['plain','Plain'],['dirty','Dirty whiteboard'],['notepad','Yellow notepad']];
+  let dirtyBoard=null;
+  function dirtyBoardSrc(){
+    if(dirtyBoard)return dirtyBoard;
+    const W=1600,H=900,c=document.createElement('canvas');c.width=W;c.height=H;const g=c.getContext('2d');
+    let seed=20261012;const rand=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;};
+    g.fillStyle='#f3f4f1';g.fillRect(0,0,W,H);
+    // Everything is drawn nine times, shifted by the tile size, so the texture repeats without seams.
+    const tiled=draw=>{for(const dx of [-W,0,W])for(const dy of [-H,0,H]){g.save();g.translate(dx,dy);draw();g.restore();}};
+    const dab=(x,y,r,rgb,alpha)=>{const grad=g.createRadialGradient(x,y,0,x,y,r);grad.addColorStop(0,`rgba(${rgb},${alpha})`);grad.addColorStop(1,`rgba(${rgb},0)`);g.fillStyle=grad;g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fill();};
+    // A grey haze of old smudges.
+    for(let i=0;i<34;i++){const x=rand()*W,y=rand()*H,r=50+rand()*230,sx=.6+rand()*1.6,alpha=.018+rand()*.045,turn=rand()*Math.PI;
+      tiled(()=>{g.translate(x,y);g.rotate(turn);g.scale(sx,1);dab(0,0,r,'112,124,132',alpha);});}
+    // Ghosts of erased writing: rows of loops and humps, fading in and out where the eraser caught them.
+    g.lineCap='round';g.lineJoin='round';
+    for(let i=0;i<22;i++){
+      const x0=rand()*W,y0=rand()*H,rgb=rand()<.2?'150,80,80':rand()<.35?'60,95,150':'70,84,98',alpha=.05+rand()*.06,lw=2.4+rand()*2.2,words=1+Math.floor(rand()*3),pts=[];
+      let x=x0;
+      for(let w=0;w<words;w++){const letters=2+Math.floor(rand()*6);
+        for(let l=0;l<letters;l++){const kind=rand(),wide=12+rand()*12,tall=kind<.25?44+rand()*20:18+rand()*14,fade=.25+rand()*.75;
+          if(kind<.25)pts.push([x+wide*.2,y0-tall,x+wide*.6,y0,fade]);
+          else if(kind<.6)pts.push([x+wide*.5,y0-tall*1.6,x+wide,y0,fade]);
+          else{pts.push([x+wide*.1,y0-tall,x+wide*.5,y0-tall,fade]);pts.push([x+wide*.9,y0-tall,x+wide,y0,fade]);}
+          x+=wide;}
+        x+=18+rand()*20;}
+      tiled(()=>{g.lineWidth=lw;let px=x0,py=y0;for(const [cx,cy,ex,ey,fade] of pts){g.strokeStyle=`rgba(${rgb},${alpha*fade})`;g.beginPath();g.moveTo(px,py);g.quadraticCurveTo(cx,cy,ex,ey);g.stroke();px=ex;py=ey;}});}
+    // Eraser swipes: soft bands with fine drag lines along them.
+    for(let i=0;i<9;i++){const x=rand()*W,y=rand()*H,len=220+rand()*420,bend=(rand()-.5)*90,w=40+rand()*50,alpha=.012+rand()*.012,lines=Array.from({length:10},()=>[(rand()-.5)*w*.8,.02+rand()*.035,rand()*.3,.7+rand()*.3]);
+      const at=t=>[x+len*t,y+bend*4*t*(1-t)];
+      tiled(()=>{for(let t=0;t<=1;t+=.025){const [px,py]=at(t);dab(px,py,w*.6,'104,116,126',alpha);}
+        g.lineWidth=1.2;for(const [off,a,from,to] of lines){g.strokeStyle=`rgba(96,108,118,${a})`;g.beginPath();for(let t=from;t<=to;t+=.05){const [px,py]=at(t);if(t===from)g.moveTo(px,py+off);else g.lineTo(px,py+off);}g.stroke();}});}
+    for(let i=0;i<70;i++){const x=rand()*W,y=rand()*H,r=.6+rand()*1.8,alpha=.08+rand()*.12;tiled(()=>{g.fillStyle=`rgba(90,100,108,${alpha})`;g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fill();});}
+    return dirtyBoard=c.toDataURL('image/jpeg',.9);
+  }
+  function boardMarkup(s,[x,y,w,h]){
+    if(s.board==='dirty')return `<defs><pattern id="board-dirty" patternUnits="userSpaceOnUse" width="1600" height="900"><image href="${dirtyBoardSrc()}" width="1600" height="900"/></pattern></defs><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#board-dirty)"/>`;
+    if(s.board==='notepad'){
+      const left=baseBox()[0]+Math.min(130,baseBox()[2]*.09);
+      return `<defs><pattern id="board-lines" patternUnits="userSpaceOnUse" width="1600" height="50" y="12"><rect width="1600" height="50" fill="#fdf2a6"/><path d="M0 49H1600" stroke="#9fbfd8" stroke-width="2.2"/></pattern></defs><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="url(#board-lines)"/><path d="M${left} ${y}V${y+h}M${left+8} ${y}V${y+h}" stroke="#e58a86" stroke-width="2"/>`;
+    }
+    return `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${esc(s.background||'#ffffff')}"/>`;
+  }
   function renderMarkup(s,vis,editing=false,frameBox=baseBox()){
     handScale=vis.camera?.hand??handSizeOf();handAngle=vis.camera?.angle??handAngleOf();
-    let markup=`<rect x="${frameBox[0]}" y="${frameBox[1]}" width="${frameBox[2]}" height="${frameBox[3]}" fill="${esc(s.background||'#ffffff')}"/>`;
+    let markup=boardMarkup(s,frameBox);
     if(editing)for(const cam of s.items.filter(x=>x.type==='camera')){const [x,y,w,h]=cameraBox(cam);markup+=`<rect data-item="${esc(cam.id)}" x="${x}" y="${y}" width="${w}" height="${h}" fill="#72baa20d" stroke="#64a99a" stroke-width="${Math.max(2,frameBox[2]/500)}" stroke-dasharray="${Math.max(10,frameBox[2]/90)} ${Math.max(6,frameBox[2]/150)}" style="cursor:move" pointer-events="all"/>`;}
     for(const v of [...vis.visible].sort((a,b)=>num(a.it.z)-num(b.it.z))){
       const it=v.it;
@@ -723,6 +768,9 @@
       if(e.target.matches('[data-duck-level]')){state.project.duckLevel=+e.target.value;$('#duckLevelLabel').textContent=`${Math.round(e.target.value*100)}%`;changed(false);return;}
       if(e.target.matches('[data-voice-speed]')){state.project.voiceSpeed=+e.target.value;$('#voiceSpeedLabel').textContent=`${Math.round(e.target.value*100)}%`;changed(false);return;}
       if(e.target.matches('[data-clip-set]'))applyClipField(e.target.dataset.clipSet,e.target.value);});
+    $('#inspector').addEventListener('click',e=>{const del=e.target.closest('[data-mine-delete]');if(del){e.stopPropagation();deleteMine(del.dataset.mineDelete);return;}const mine=e.target.closest('[data-mine]');if(mine){addMineDrawing(mine.dataset.mine);return;}if(e.target.closest('[data-lib-upload]'))$('#libraryInput').click();});
+    $('#libraryInput').addEventListener('change',e=>{const files=[...e.target.files];e.target.value='';if(files.length)chooseMineUploads(files);});
+    $('#inspector').addEventListener('click',e=>{const b=e.target.closest('[data-board]');if(!b)return;snapshot();scene().board=b.dataset.board==='plain'?undefined:b.dataset.board;changed();});
     $('#inspector').addEventListener('click',e=>{const sw=e.target.closest('[data-color]');if(!sw||!item())return;snapshot();applyField('color',sw.dataset.color);renderInspector();});
     $('#inspector').addEventListener('change',e=>{
       if(e.target.matches('[data-effect-reverse]')){const it=item();if(it){snapshot();it.effectReverse=e.target.checked;changed(false);}return;}
@@ -1085,7 +1133,7 @@
     }else if(state.tool==='audio'){
       html=audioPanel();
     }else{
-      html=`<div class="panel-eyebrow">SCENE SETTINGS</div><h2 class="panel-title">${esc(s.name)}</h2><p class="panel-help">Build your whiteboard story, one moment at a time.</p>${field('Scene name','sceneName',s.name)}${field('Background','background',s.background,'color')}${scriptFields(s)}<div class="panel-divider"></div>${handField(null,'Used in scenes without camera moves. Each camera move can set its own size and angle.')}<div class="panel-divider"></div>${formatField()}<div class="panel-divider"></div><div class="note-card">Pan across the whiteboard to build beyond the first frame. Add camera views to choose each shot.</div><div class="panel-divider"></div><button class="panel-action danger" data-action="scene-delete" ${state.project.scenes.length===1?'disabled':''}>Delete scene</button>`;
+      html=`<div class="panel-eyebrow">SCENE SETTINGS</div><h2 class="panel-title">${esc(s.name)}</h2><p class="panel-help">Build your whiteboard story, one moment at a time.</p>${field('Scene name','sceneName',s.name)}<div class="field"><label>Board</label><div class="segmented board-picker">${BOARDS.map(([v,n])=>`<button data-board="${v}" class="${(s.board||'plain')===v?'active':''}">${n}</button>`).join('')}</div></div>${(s.board||'plain')==='plain'?field('Background','background',s.background,'color'):''}<button class="panel-action" data-action="board-all">Use this board on every scene</button>${scriptFields(s)}<div class="panel-divider"></div>${handField(null,'Used in scenes without camera moves. Each camera move can set its own size and angle.')}<div class="panel-divider"></div>${formatField()}<div class="panel-divider"></div><div class="note-card">Pan across the whiteboard to build beyond the first frame. Add camera views to choose each shot.</div><div class="panel-divider"></div><button class="panel-action danger" data-action="scene-delete" ${state.project.scenes.length===1?'disabled':''}>Delete scene</button>`;
     }
     $('#inspector').innerHTML=html;
     const picker=$('.font-picker'),chosen=picker?.querySelector('.active');if(chosen)picker.scrollTop=chosen.offsetTop-picker.offsetTop-picker.clientHeight/2+chosen.clientHeight/2;
@@ -1230,7 +1278,7 @@
   // credit needed in videos) and load the first time their tab is shown. Results show a page at a time.
   const LIBRARY_PAGE=96,ICON_STROKE=1.25,INK=[0x1f,0x2a,0x36];
   const SKIN_TONES=[['','Default','#ffc83d'],['light','Light','#f7d7c4'],['medium-light','Medium-light','#e5b593'],['medium','Medium','#c48f6a'],['medium-dark','Medium-dark','#8d5a3b'],['dark','Dark','#5b3a29']];
-  const library={tab:'art',query:'',category:'all',limit:LIBRARY_PAGE,tone:'',art:null,icons:null,loading:{},peep:{head:'short2',face:'smile',facialHair:'',accessories:'',skin:'edb98a',clothing:'8fa7df',hair:'2c1b18'}};
+  const library={tab:'art',query:'',category:'all',limit:LIBRARY_PAGE,tone:'',art:null,icons:null,mine:[],loading:{},peep:{head:'short2',face:'smile',facialHair:'',accessories:'',skin:'edb98a',clothing:'8fa7df',hair:'2c1b18'}};
   function loadLibrarySet(kind){
     library.loading[kind]??=fetch(kind==='art'?'./assets/illustrations/index.json':'./assets/icons/tabler-icons.json').then(r=>{if(!r.ok)throw new Error('Library did not load');return r.json();})
       .then(data=>{library[kind]=data;}).catch(e=>{delete library.loading[kind];throw e;});
@@ -1241,8 +1289,9 @@
       const basics=iconKeys.map(k=>({kind:'basic',key:k,name:ICONS[k].name,category:'Hand-drawn basics',words:''}));
       return basics.concat((library.icons?.icons||[]).map(([name,cat,words],i)=>({kind:'tabler',i,name:name.replace(/-/g,' '),category:library.icons.categories[cat],words})));
     }
+    const mine=(library.mine||[]).map(m=>({kind:'mine',id:m.id,name:m.name,category:MINE_CATEGORY,words:'my upload uploaded own',src:m.src}));
     const sheets=SHEETS.flatMap((sheet,si)=>sheet.items.map((name,ii)=>({kind:'sheet',si,ii,name,category:sheet.name,words:''})));
-    return sheets.concat((library.art?.items||[]).map(([path,name,group,words,toned])=>({kind:'art',path,name,category:group,words,toned})));
+    return mine.concat(sheets).concat((library.art?.items||[]).map(([path,name,group,words,toned])=>({kind:'art',path,name,category:group,words,toned})));
   }
   function libraryResults(){
     const words=library.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -1253,19 +1302,20 @@
   function libraryThumb(e){
     if(e.kind==='sheet'){const sheet=SHEETS[e.si],cols=sheet.cols||2,rows=sheet.rows||2;return sheet.file?`<span class="sheet-thumb" style="background-image:url('./assets/sheets/${sheet.file}');background-size:${cols*100}% ${rows*100}%;background-position:${(e.ii%cols)/(cols-1)*100}% ${Math.floor(e.ii/cols)/(rows-1)*100}%"></span>`:'<span class="sheet-thumb"></span>';}
     if(e.kind==='art')return `<img src="./assets/illustrations/${esc(artFile(e))}" alt="" loading="lazy" decoding="async">`;
+    if(e.kind==='mine')return `<img src="${esc(e.src)}" alt="" decoding="async">`;
     const basic=e.kind==='basic',paths=basic?ICONS[e.key].paths:library.icons.icons[e.i][3];
     return `<svg viewBox="${basic?'0 0 100 100':'0 0 24 24'}" fill="none" stroke="currentColor" stroke-width="${basic?5:1.7}" stroke-linecap="round" stroke-linejoin="round">${paths.map(d=>`<path d="${esc(d)}"/>`).join('')}</svg>`;
   }
   function libraryButton(e){
-    const data=e.kind==='sheet'?`data-sheet="${e.si}" data-sheet-item="${e.ii}"`:e.kind==='art'?`data-art="${esc(artFile(e))}" data-art-name="${esc(e.name)}"`:e.kind==='basic'?`data-icon="${e.key}"`:`data-tabler="${e.i}"`;
-    return `<button class="lib-item ${e.category==='Backdrops'?'wide':''}" ${data} title="Add ${esc(e.name)}"><span class="lib-thumb">${libraryThumb(e)}</span><span class="lib-name">${esc(e.name)}</span></button>`;
+    const data=e.kind==='mine'?`data-mine="${esc(e.id)}"`:e.kind==='sheet'?`data-sheet="${e.si}" data-sheet-item="${e.ii}"`:e.kind==='art'?`data-art="${esc(artFile(e))}" data-art-name="${esc(e.name)}"`:e.kind==='basic'?`data-icon="${e.key}"`:`data-tabler="${e.i}"`;
+    return `<button class="lib-item ${e.category==='Backdrops'?'wide':''}" ${data} title="Add ${esc(e.name)}"><span class="lib-thumb">${libraryThumb(e)}</span><span class="lib-name">${esc(e.name)}</span>${e.kind==='mine'?`<span class="mine-del" data-mine-delete="${esc(e.id)}" role="button" title="Remove from my library" aria-label="Remove ${esc(e.name)} from my library">×</span>`:''}</button>`;
   }
   function libraryPanel(){
     const tabs=`<div class="segmented lib-tabs">${[['art','Illustrations'],['characters','Characters'],['icons','Icons']].map(([v,n])=>`<button data-lib-tab="${v}" class="${library.tab===v?'active':''}">${n}</button>`).join('')}</div>`;
     if(library.tab==='characters')return `<div class="panel-eyebrow">LIBRARY</div><h2 class="panel-title">Drawings</h2>${tabs}${characterBuilder()}`;
-    const icons=library.tab==='icons',groups=icons?[['Icons',['Hand-drawn basics',...(library.icons?.categories||[]).slice().sort()]]]:[['Illustrations',library.art?.groups||[]],['Whiteboard drawings',SHEETS.map(s=>s.name)]];
+    const icons=library.tab==='icons',groups=icons?[['Icons',['Hand-drawn basics',...(library.icons?.categories||[]).slice().sort()]]]:[['Illustrations',[...(library.mine?.length?[MINE_CATEGORY]:[]),...(library.art?.groups||[])]],['Whiteboard drawings',SHEETS.map(s=>s.name)]];
     return `<div class="panel-eyebrow">LIBRARY</div><h2 class="panel-title">Drawings</h2>${tabs}
-      <div class="field"><input id="librarySearch" type="search" placeholder="Search ${icons?'icons':'illustrations'}" value="${esc(library.query)}" aria-label="Search the library"></div>
+      ${icons?'':`<button class="button subtle small lib-upload" data-lib-upload>⬆ Upload to my library</button>`}<div class="field"><input id="librarySearch" type="search" placeholder="Search ${icons?'icons':'illustrations'}" value="${esc(library.query)}" aria-label="Search the library"></div>
       <div class="field"><select id="libraryCategory" aria-label="Category"><option value="all">All categories</option>${groups.map(([label,list])=>`<optgroup label="${label}">${list.map(c=>`<option value="${esc(c)}" ${library.category===c?'selected':''}>${esc(c)}</option>`).join('')}</optgroup>`).join('')}</select></div>
       ${icons?'':`<div class="tone-row" title="Skin tone for people"><span>Skin tone</span>${SKIN_TONES.map(([v,n,c])=>`<button class="tone ${library.tone===v?'active':''}" data-lib-tone="${v}" title="${n}" style="background:${c}"></button>`).join('')}</div>`}
       <p id="libraryCount" class="lib-count"></p><div id="libraryGrid" class="lib-grid ${icons?'icons':''}"></div>
@@ -1319,6 +1369,116 @@
   }
   // Adds an illustration from the index. Fluent art gets the marker outline; doodles, backdrops and this project's own
   // drawings (drawn/) are line art already. Wide pieces such as underlines and timelines start wider.
+  // My uploads: the person's own pictures, illustrations and icons, kept in this browser's database (the "library"
+  // store) so they can be reused in every project. A file can be one drawing, or a sheet of drawings in a grid that is
+  // cut into separate drawings like the storybook sheets. Download backup carries them along with the projects.
+  const MINE_CATEGORY='My uploads',MINE_SIDE=720;
+  function mineTask(mode,fn){return new Promise((resolve,reject)=>{const tx=state.db.transaction('library',mode),req=fn(tx.objectStore('library'));req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
+  async function loadMine(){try{library.mine=(await mineTask('readonly',s=>s.getAll())).sort((a,b)=>a.added-b.added);}catch(e){console.error(e);library.mine=[];}}
+  // Reads an image file onto a canvas, at most 2400px on its long side.
+  async function fileCanvas(file){
+    const url=URL.createObjectURL(file);
+    try{const image=await loadImage(url),k=Math.min(1,2400/Math.max(image.naturalWidth||1,image.naturalHeight||1)),c=document.createElement('canvas');
+      c.width=Math.max(1,Math.round((image.naturalWidth||800)*k));c.height=Math.max(1,Math.round((image.naturalHeight||800)*k));c.getContext('2d').drawImage(image,0,0,c.width,c.height);return c;}
+    finally{URL.revokeObjectURL(url);}
+  }
+  // Clears a plain white or near-white background that touches the edges, softening the edge around the artwork.
+  function clearWhite(data,W,H){
+    const px=data.data,N=W*H,bg=new Uint8Array(N),queue=new Int32Array(N);let tail=0;
+    const white=i=>{const r=px[i*4],g=px[i*4+1],b=px[i*4+2],lo=Math.min(r,g,b);return px[i*4+3]<16||(lo>=232&&Math.max(r,g,b)-lo<=22);};
+    for(let x=0;x<W;x++)for(const y of [0,H-1]){const i=y*W+x;if(!bg[i]&&white(i)){bg[i]=1;queue[tail++]=i;}}
+    for(let y=0;y<H;y++)for(const x of [0,W-1]){const i=y*W+x;if(!bg[i]&&white(i)){bg[i]=1;queue[tail++]=i;}}
+    for(let head=0;head<tail;head++){const i=queue[head],x=i%W;for(const j of [x>0?i-1:-1,x<W-1?i+1:-1,i-W,i+W])if(j>=0&&j<N&&!bg[j]&&white(j)){bg[j]=1;queue[tail++]=j;}}
+    for(let i=0;i<N;i++){
+      if(bg[i]){px[i*4+3]=0;continue;}
+      const x=i%W;if(!((x>0&&bg[i-1])||(x<W-1&&bg[i+1])||bg[i-W]||bg[i+W]))continue;
+      // Edge pixels are partly white: keep the part that is artwork.
+      const lo=Math.min(px[i*4],px[i*4+1],px[i*4+2]),a=clamp((255-lo)/70,0,1);if(a>=1)continue;
+      if(a<=.02){px[i*4+3]=0;continue;}
+      for(let k=0;k<3;k++)px[i*4+k]=clamp((px[i*4+k]-255*(1-a))/a,0,255);px[i*4+3]=Math.round(px[i*4+3]*a);
+    }
+  }
+  const hasTransparency=data=>{const px=data.data;for(let i=3;i<px.length;i+=4*97)if(px[i]<200)return true;return false;};
+  // Splits a sheet laid out in a grid. Each drawing's solid core (nearly opaque pieces of a fair size) decides its
+  // cell; faint edge and glow pixels go to the nearest core they connect to; loose bits go to the cell they sit in.
+  function cutSheetCells(data,W,H,cols,rows){
+    const px=data.data,N=W*H,owner=new Int16Array(N).fill(-1),seen=new Uint8Array(N),queue=new Int32Array(N),minCore=Math.max(60,N*.0006);
+    const cellAt=(cx,cy)=>Math.min(rows-1,Math.floor(cy/(H/rows)))*cols+Math.min(cols-1,Math.floor(cx/(W/cols)));
+    const blobs=(test,visit)=>{for(let s=0;s<N;s++){if(seen[s]||!test(s))continue;let head=0,tail=0,sx=0,sy=0;queue[tail++]=s;seen[s]=1;
+      while(head<tail){const i=queue[head++],x=i%W,y=(i/W)|0;sx+=x;sy+=y;for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const nx=x+dx,ny=y+dy;if(nx<0||ny<0||nx>=W||ny>=H)continue;const j=ny*W+nx;if(!seen[j]&&test(j)){seen[j]=1;queue[tail++]=j;}}}
+      visit(queue.slice(0,tail),tail,sx/tail,sy/tail);}};
+    const seeds=[];
+    blobs(i=>px[i*4+3]>=240,(list,n,cx,cy)=>{if(n<minCore)return;const cell=cellAt(cx,cy);for(const i of list){owner[i]=cell;seeds.push(i);}});
+    const grown=new Int32Array(N);grown.set(seeds);let tail=seeds.length;
+    for(let head=0;head<tail;head++){const i=grown[head],x=i%W,y=(i/W)|0;for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const nx=x+dx,ny=y+dy;if(nx<0||ny<0||nx>=W||ny>=H)continue;const j=ny*W+nx;if(owner[j]<0&&px[j*4+3]>=12){owner[j]=owner[i];grown[tail++]=j;}}}
+    seen.fill(0);
+    blobs(i=>owner[i]<0&&px[i*4+3]>=12,(list,n,cx,cy)=>{const cell=cellAt(cx,cy);for(const i of list)owner[i]=cell;});
+    return Array.from({length:cols*rows},(_,c)=>{let x0=W,y0=H,x1=-1,y1=-1;for(let i=0;i<N;i++)if(owner[i]===c){const x=i%W,y=(i/W)|0;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
+      if(x1<0)return null;const out=new ImageData(x1-x0+1,y1-y0+1);
+      for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){const i=y*W+x;if(owner[i]!==c)continue;const o=((y-y0)*(x1-x0+1)+x-x0)*4;for(let k=0;k<4;k++)out.data[o+k]=px[i*4+k];}
+      return out;}).filter(Boolean);
+  }
+  // Trims transparent margins, keeps at most MINE_SIDE pixels on the long side and returns a compact image.
+  function pieceImage(data){
+    const {width:W,height:H}=data,px=data.data;let x0=W,y0=H,x1=-1,y1=-1;
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(px[(y*W+x)*4+3]>=8){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
+    if(x1<0)return null;
+    const P=8,w=x1-x0+1,h=y1-y0+1,src=document.createElement('canvas');src.width=W;src.height=H;src.getContext('2d').putImageData(data,0,0);
+    const k=Math.min(1,MINE_SIDE/Math.max(w,h)),c=document.createElement('canvas');c.width=Math.round(w*k)+P*2;c.height=Math.round(h*k)+P*2;
+    const g=c.getContext('2d');g.imageSmoothingQuality='high';g.drawImage(src,x0,y0,w,h,P,P,c.width-P*2,c.height-P*2);
+    const webp=c.toDataURL('image/webp',.9);
+    return {src:webp.startsWith('data:image/webp')?webp:c.toDataURL('image/png'),width:c.width,height:c.height};
+  }
+  function chooseMineUploads(files){
+    files=[...files].filter(f=>/^image\/(png|jpeg|webp|svg\+xml)$/.test(f.type));if(!files.length){toast('Choose PNG, JPEG, WebP or SVG images.');return;}
+    const one=files.length===1;
+    modal(`<div class="modal-top"><h2>Add to my library</h2><button class="close-button" data-mine-cancel>×</button></div>
+      <p class="panel-help">${one?esc(files[0].name):`${files.length} images`} will be saved in this browser and listed under “${MINE_CATEGORY}” in Drawings, ready for any project.</p>
+      <div class="field"><label>Each image is</label><div class="segmented"><button data-mine-kind="single" class="active">One drawing</button><button data-mine-kind="sheet">A sheet to cut up</button></div></div>
+      <div class="field-row mine-grid hidden"><div class="field"><label>Columns</label><input id="mineCols" type="number" min="1" max="10" value="4"></div><div class="field"><label>Rows</label><input id="mineRows" type="number" min="1" max="10" value="3"></div></div>
+      ${one?`<div class="field"><label>Name</label><input id="mineName" type="text" value="${esc(files[0].name.replace(/\.[^.]+$/,'').replace(/[-_]+/g,' '))}"></div>`:''}
+      <label class="check-row"><input id="mineWhite" type="checkbox" checked> Remove a plain white background</label>
+      <p id="mineStatus" class="panel-help"></p>
+      <div class="modal-foot"><button class="button ghost" data-mine-cancel>Cancel</button><button class="button primary" data-mine-save>Add to library</button></div>`);
+    let kind='single';
+    $('#modal').onclick=async e=>{
+      const k=e.target.closest('[data-mine-kind]');
+      if(k){kind=k.dataset.mineKind;document.querySelectorAll('#modal [data-mine-kind]').forEach(b=>b.classList.toggle('active',b===k));$('#modal .mine-grid').classList.toggle('hidden',kind!=='sheet');return;}
+      if(e.target.closest('[data-mine-cancel]')){$('#modal').onclick=null;closeModal();return;}
+      if(!e.target.closest('[data-mine-save]'))return;
+      const button=e.target.closest('[data-mine-save]');button.disabled=true;
+      const cols=clamp(Math.round(num($('#mineCols').value,4)),1,10),rows=clamp(Math.round(num($('#mineRows').value,3)),1,10),white=$('#mineWhite').checked,baseName=one?($('#mineName').value.trim()||'My drawing'):'';
+      let added=0;
+      try{
+        for(const [fi,file] of files.entries()){
+          $('#mineStatus').textContent=`Preparing ${file.name}… (${fi+1} of ${files.length})`;await new Promise(r=>setTimeout(r,30));
+          const canvas=await fileCanvas(file),g=canvas.getContext('2d',{willReadFrequently:true}),data=g.getImageData(0,0,canvas.width,canvas.height);
+          if(white&&!hasTransparency(data))clearWhite(data,canvas.width,canvas.height);
+          const pieces=kind==='sheet'?cutSheetCells(data,canvas.width,canvas.height,cols,rows):[data];
+          const name=baseName||file.name.replace(/\.[^.]+$/,'').replace(/[-_]+/g,' ');
+          for(const [pi,piece] of pieces.entries()){
+            const img=pieceImage(piece);if(!img)continue;
+            await mineTask('readwrite',s=>s.put({id:id(),name:pieces.length>1?`${name} ${pi+1}`:name,...img,added:Date.now()+added}));added++;
+          }
+        }
+        await loadMine();$('#modal').onclick=null;closeModal();
+        library.tab='art';library.category=MINE_CATEGORY;library.query='';library.limit=LIBRARY_PAGE;state.tool='icon';state.selected=null;renderAll();
+        toast(added?`${added} drawing${added===1?'':'s'} added to ${MINE_CATEGORY}.`:'Nothing was found in that image.');
+      }catch(err){console.error(err);button.disabled=false;$('#mineStatus').textContent='Could not read that image. Try a PNG, JPEG, WebP or SVG file.';}
+    };
+  }
+  async function addMineDrawing(mineId){
+    const entry=library.mine?.find(m=>m.id===mineId);if(!entry)return;
+    try{const trace=await traceImage(entry.src),w=420,h=w*entry.height/entry.width;
+      addItem(await withIllustration({...baseItem('image'),label:entry.name,src:entry.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,x:800-w/2,y:450-h/2,w,h,duration:2.2}));
+      toast(`${entry.name} added to the canvas.`);}
+    catch(e){console.error(e);toast('Could not add that drawing.');}
+  }
+  async function deleteMine(mineId){
+    const entry=library.mine?.find(m=>m.id===mineId);if(!entry)return;
+    if(!confirm(`Remove “${entry.name}” from your library? Drawings already placed in projects stay where they are.`))return;
+    await mineTask('readwrite',s=>s.delete(mineId));await loadMine();showLibraryResults();toast(`${entry.name} removed from your library.`);
+  }
   async function addArtDrawing(file,name){
     try{
       const response=await fetch(`./assets/illustrations/${file}`);if(!response.ok)throw new Error('Illustration did not load');
@@ -1828,7 +1988,7 @@
     return `<div class="backup-card ok"><strong>Automatic backup ${backup.permission==='granted'?'on':'paused'}</strong><span>Folder “${esc(backup.folder.name)}”${backup.last?` · last backup ${new Date(backup.last).toLocaleString()}`:''}. A dated copy is kept each day in its history folder.</span><span class="backup-actions">${backup.permission==='granted'?'<button class="panel-action" data-backup="now">Back up now</button>':'<button class="button primary small" data-backup="reconnect">Reconnect folder</button>'}<button class="panel-action" data-backup="choose">Change folder</button><button class="panel-action danger" data-backup="stop">Stop</button></span></div>`;
   }
   // Version 2 adds a settings store (the backup folder) beside the projects.
-  function openDb(){return new Promise((resolve,reject)=>{const req=indexedDB.open('whiteboard-studio',2);req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains('projects'))db.createObjectStore('projects',{keyPath:'id'});if(!db.objectStoreNames.contains('settings'))db.createObjectStore('settings',{keyPath:'key'});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
+  function openDb(){return new Promise((resolve,reject)=>{const req=indexedDB.open('whiteboard-studio',3);req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains('projects'))db.createObjectStore('projects',{keyPath:'id'});if(!db.objectStoreNames.contains('settings'))db.createObjectStore('settings',{keyPath:'key'});if(!db.objectStoreNames.contains('library'))db.createObjectStore('library',{keyPath:'id'});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
   function dbTask(mode,fn){return new Promise((resolve,reject)=>{const tx=state.db.transaction('projects',mode),store=tx.objectStore('projects');let req=fn(store);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
   async function saveProject(){try{await dbTask('readwrite',s=>s.put(storedProject(state.project)));localStorage.setItem('whiteboard-current',state.project.id);$('#saveStatus').textContent='Saved locally';scheduleBackup();}catch(e){$('#saveStatus').textContent='Could not save';toast('This project could not be saved. Check your browser storage.');}}
   async function migrateProject(p){
@@ -1881,7 +2041,7 @@
   async function showProjects(){await saveProject();const projects=await listProjects();modal(`<div class="modal-top"><h2>My projects</h2><button class="close-button" data-modal="close">×</button></div><p class="panel-help">Projects are saved in this browser. Download a backup to move them to another browser or computer.</p>${backupPanel()}${projects.map(p=>`<div class="project-card"><span class="scene-number">✎</span><span><strong>${esc(p.name)}</strong><small>${p.scenes.length} scene${p.scenes.length===1?'':'s'} · ${new Date(p.updated).toLocaleDateString()}${projectHint(p)?` · “${esc(projectHint(p))}”`:''}</small></span><button class="panel-action" data-open="${esc(p.id)}">Open</button><button class="panel-action danger" data-delete-project="${esc(p.id)}">Delete</button></div>`).join('')}<div class="modal-foot"><button class="button ghost" data-modal="backup">Download backup</button><button class="button ghost" data-modal="import">Import backup</button><button class="button primary" data-modal="new">+ New project</button></div>`);}
   async function downloadProjectBackup(){
     await saveProject();const projects=await listProjects();
-    const backup={format:'whiteboard-studio-backup',version:1,exportedAt:new Date().toISOString(),projects};
+    const backup={format:'whiteboard-studio-backup',version:1,exportedAt:new Date().toISOString(),projects,library:await mineTask('readonly',s=>s.getAll())};
     download(new Blob([JSON.stringify(backup)],{type:'application/json'}),`whiteboard-studio-projects-${new Date().toISOString().slice(0,10)}.json`);
     toast(`${projects.length} project${projects.length===1?'':'s'} backed up.`);
   }
@@ -1897,7 +2057,10 @@
         if(existing){project.id=id();project.name=`${project.name||'Untitled video'} (imported)`;}
         await dbTask('readwrite',s=>s.put(project));imported.push(project.id);
       }
-      await loadProject(imported[0]);toast(`${imported.length} project${imported.length===1?'':'s'} imported.`);
+      let drawings=0;
+      for(const m of Array.isArray(backup.library)?backup.library:[]){if(!m||typeof m.id!=='string'||!/^data:image\/(png|webp|jpeg);base64,/.test(m.src||''))continue;if(await mineTask('readonly',s=>s.get(m.id)))continue;await mineTask('readwrite',s=>s.put({id:m.id,name:String(m.name||'My drawing').slice(0,80),src:m.src,width:num(m.width,400),height:num(m.height,400),added:num(m.added,Date.now())}));drawings++;}
+      if(drawings)await loadMine();
+      await loadProject(imported[0]);toast(`${imported.length} project${imported.length===1?'':'s'} imported${drawings?` with ${drawings} library drawing${drawings===1?'':'s'}`:''}.`);
     }catch(e){console.error(e);toast(`Could not import backup: ${e.message}`);}
   }
   function showNewProject(){modal(`<div class="modal-top"><h2>New video</h2><button class="close-button" data-modal="close">×</button></div><p class="panel-help">Choose a format and start with a blank whiteboard.</p><div class="field"><label>Project name</label><input id="newName" maxlength="80" value="Untitled video"></div><div class="field"><label>Format</label><select id="newRatio"><option value="16:9">16:9 — Landscape</option><option value="1:1">1:1 — Square</option><option value="9:16">9:16 — Portrait</option></select></div><div class="modal-foot"><button class="button ghost" data-modal="close">Cancel</button><button class="button primary" data-modal="create">Create video</button></div>`);}
@@ -2247,6 +2410,7 @@
   function action(name){
     const it=item(),items=scene().items;
     if(name==='scene-delete'){deleteScene(state.sceneIndex);return;}
+    if(name==='board-all'){snapshot();const s=scene();for(const other of state.project.scenes){other.board=s.board;if(!s.board)other.background=s.background;}changed();toast(`Every scene now uses the ${BOARDS.find(([v])=>v===(s.board||'plain'))[1].toLowerCase()} board.`);return;}
     if(name==='preview-camera'){previewCamera();return;}
     if(name==='narrate'){stopPreviewVoice();narrateScene(scene());return;}
     if(name==='preview-script'){const text=String(scene().script||'').trim();if(text)previewVoice(text,'script');else toast('Write a script for this scene first.');return;}
@@ -2357,7 +2521,7 @@
   async function init(){try{
     const fontResponse=await fetch('./assets/stroke-font.json');if(!fontResponse.ok)throw new Error('Writing font did not load');state.fonts=await fontResponse.json();
     state.handImage=await loadImage(HAND.src);
-    state.db=await openDb();
+    state.db=await openDb();await loadMine();
     // Ask the browser to keep this site's storage through automatic clean-ups.
     try{await navigator.storage?.persist?.();}catch{}
     await loadBackupFolder();const current=localStorage.getItem('whiteboard-current');let p=current?await dbTask('readonly',s=>s.get(current)):null;if(!p){const all=await listProjects();p=all[0]||demoProject();}

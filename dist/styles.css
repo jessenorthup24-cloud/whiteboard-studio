@@ -38,3 +38,5 @@
 .save-row{display:flex;align-items:center;gap:2px}
 .scene-tile .scene-del{display:grid;place-items:center;width:18px;height:18px;border-radius:5px;color:#a0abb0;font-size:14px;line-height:1;opacity:0;transition:opacity .12s}.scene-tile:hover .scene-del,.scene-tile.active .scene-del{opacity:1}.scene-tile .scene-del:hover{background:#fbe4df;color:#cf6d63}.scene-tile:hover .scene-length{display:none}
 .swatch-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.swatch{width:22px;height:22px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #d3dcd9;padding:0}.swatch.active{box-shadow:0 0 0 2px #f27a59}.swatch-row input[type=color]{width:34px;height:26px;padding:1px;border:1px solid #dce3e1;border-radius:7px;background:#fff;cursor:pointer}
+
+.lib-upload{width:100%;margin:0 0 12px}.lib-item{position:relative}.lib-item .mine-del{position:absolute;top:3px;right:3px;width:18px;height:18px;border-radius:50%;background:#fff;color:#a0abb0;font-size:13px;line-height:18px;text-align:center;box-shadow:0 1px 3px #0002;opacity:0;transition:opacity .12s}.lib-item:hover .mine-del{opacity:1}.lib-item .mine-del:hover{color:#cf6d63}
