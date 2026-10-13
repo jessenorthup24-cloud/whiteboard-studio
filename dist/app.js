@@ -106,14 +106,22 @@
       offset+=len;
     }
   }
+  // The drawing hand's size is a multiple of its normal size, and its angle a tilt in degrees about the pen tip. Each
+  // camera move keeps its own (handSize, handAngle), so a close-up can use a smaller hand than a wide shot; scenes
+  // without camera moves use the project's (project.handSize, project.handAngle).
+  const HAND_SIZES=[.3,4],HAND_ANGLES=[-90,90];
+  const handSizeOf=cam=>clamp(num(cam?.handSize,num(state.project?.handSize,1)),...HAND_SIZES);
+  const handAngleOf=cam=>clamp(num(cam?.handAngle,num(state.project?.handAngle,0)),...HAND_ANGLES);
+  let handScale=1,handAngle=0;
+  const handImage=(x,y,k,deg,extra='')=>`<image href="${HAND.src}" x="${x-HAND.x*k}" y="${y-HAND.y*k}" width="${HAND.w*k}" height="${HAND.h*k}" ${deg?`transform="rotate(${+deg.toFixed(2)} ${x} ${y})"`:''} ${extra} pointer-events="none"/>`;
   function visualAt(s,t){
     const firstCamera=s.items.find(x=>x.type==='camera');
-    let camera=firstCamera?{cx:firstCamera.cx,cy:firstCamera.cy,zoom:firstCamera.zoom}:{cx:800,cy:450,zoom:1},visible=[];
+    let camera=firstCamera?{cx:firstCamera.cx,cy:firstCamera.cy,zoom:firstCamera.zoom,hand:handSizeOf(firstCamera),angle:handAngleOf(firstCamera)}:{cx:800,cy:450,zoom:1,hand:handSizeOf(),angle:handAngleOf()},visible=[];
     for(const {it,start,end} of sceneSchedule(s)){
       if(it.type==='camera'){
-        const next={cx:it.cx,cy:it.cy,zoom:it.zoom};
+        const next={cx:it.cx,cy:it.cy,zoom:it.zoom,hand:handSizeOf(it),angle:handAngleOf(it)};
         if(t>=end) camera=next;
-        else if(t>=start){const p=clamp((t-start)/(end-start),0,1);camera={cx:camera.cx+(next.cx-camera.cx)*p,cy:camera.cy+(next.cy-camera.cy)*p,zoom:camera.zoom+(next.zoom-camera.zoom)*p};}
+        else if(t>=start){const p=clamp((t-start)/(end-start),0,1);camera={cx:camera.cx+(next.cx-camera.cx)*p,cy:camera.cy+(next.cy-camera.cy)*p,zoom:camera.zoom+(next.zoom-camera.zoom)*p,hand:camera.hand+(next.hand-camera.hand)*p,angle:camera.angle+(next.angle-camera.angle)*p};}
       }else if(t>=start){visible.push({it,progress:clamp((t-start)/(end-start),0,1),active:t<end,since:t-end});}
     }
     return {camera,visible};
@@ -192,8 +200,8 @@
   }
   function handMarkup(x,y){
     const world=handTransform?matApply(handTransform,[x,y]):[x,y];
-    if(exportRender){exportHand={x:world[0],y:world[1]};return '';}
-    const image=`<image href="${HAND.src}" x="${world[0]-HAND.x}" y="${world[1]-HAND.y}" width="${HAND.w}" height="${HAND.h}" pointer-events="none"/>`;
+    if(exportRender){exportHand={x:world[0],y:world[1],k:handScale,deg:handAngle};return '';}
+    const image=handImage(world[0],world[1],handScale,handAngle);
     return handTransform?`<g transform="matrix(${matInvert(handTransform).map(v=>+v.toFixed(6)).join(' ')})">${image}</g>`:image;
   }
   function sequenceMarkup(paths,progress,withHand){
@@ -385,6 +393,7 @@
     return start+maskedDrawing(it,body,progress,hand&&progress<1)+hit+end;
   }
   function renderMarkup(s,vis,editing=false,frameBox=baseBox()){
+    handScale=vis.camera?.hand??handSizeOf();handAngle=vis.camera?.angle??handAngleOf();
     let markup=`<rect x="${frameBox[0]}" y="${frameBox[1]}" width="${frameBox[2]}" height="${frameBox[3]}" fill="${esc(s.background||'#ffffff')}"/>`;
     if(editing)for(const cam of s.items.filter(x=>x.type==='camera')){const [x,y,w,h]=cameraBox(cam);markup+=`<rect data-item="${esc(cam.id)}" x="${x}" y="${y}" width="${w}" height="${h}" fill="#72baa20d" stroke="#64a99a" stroke-width="${Math.max(2,frameBox[2]/500)}" stroke-dasharray="${Math.max(10,frameBox[2]/90)} ${Math.max(6,frameBox[2]/150)}" style="cursor:move" pointer-events="all"/>`;}
     for(const v of [...vis.visible].sort((a,b)=>num(a.it.z)-num(b.it.z))){
@@ -396,6 +405,7 @@
       const many=selectedItems().filter(x=>x.type!=='camera');
       if(many.length>1){const sw=Math.max(2,frameBox[2]/650);for(const it of many){const [x,y,w,h]=[it.x,it.y,it.w,it.h],r=rotationOf(it),[cx,cy]=centerOf(it);markup+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#f27a59" stroke-width="${sw}" stroke-dasharray="${sw*3} ${sw*2}" ${r?`transform="rotate(${r} ${cx} ${cy})"`:''} pointer-events="none"/>`;}const [ux,uy,uw,uh]=unionBox(many);markup+=`<rect x="${ux}" y="${uy}" width="${uw}" height="${uh}" fill="#f27a5908" stroke="#f27a59" stroke-width="${sw}" pointer-events="none"/>`;}
       else if(selected)markup+=selectionMarkup(selected,frameBox);
+      if(selected?.type==='camera'&&many.length<2){const [x,y,w,h]=cameraBox(selected);markup+=handImage(x+w*.62,y+h*.55,handSizeOf(selected),handAngleOf(selected),'opacity=".5"');}
       if(state.marquee){const [x,y,w,h]=state.marquee,sw=Math.max(1.5,frameBox[2]/800);markup+=`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#64a99a14" stroke="#64a99a" stroke-width="${sw}" stroke-dasharray="${sw*4} ${sw*3}" pointer-events="none"/>`;}
       markup+=guidesMarkup(frameBox);
     }
@@ -713,6 +723,7 @@
       if(e.target.matches('[data-duck-level]')){state.project.duckLevel=+e.target.value;$('#duckLevelLabel').textContent=`${Math.round(e.target.value*100)}%`;changed(false);return;}
       if(e.target.matches('[data-voice-speed]')){state.project.voiceSpeed=+e.target.value;$('#voiceSpeedLabel').textContent=`${Math.round(e.target.value*100)}%`;changed(false);return;}
       if(e.target.matches('[data-clip-set]'))applyClipField(e.target.dataset.clipSet,e.target.value);});
+    $('#inspector').addEventListener('click',e=>{const sw=e.target.closest('[data-color]');if(!sw||!item())return;snapshot();applyField('color',sw.dataset.color);renderInspector();});
     $('#inspector').addEventListener('change',e=>{
       if(e.target.matches('[data-effect-reverse]')){const it=item();if(it){snapshot();it.effectReverse=e.target.checked;changed(false);}return;}
       if(e.target.matches('[data-voice]')){state.project.voice=e.target.value;changed(false);return;}
@@ -1043,6 +1054,10 @@
   const field=(label,key,val,type='text',opts='')=>`<div class="field"><label>${label}</label><input data-set="${key}" type="${type}" value="${esc(val)}" ${opts}></div>`;
   const selectField=(label,key,val,options)=>`<div class="field"><label>${label}</label><select data-set="${key}">${options.map(([v,n])=>`<option value="${v}" ${val===v?'selected':''}>${n}</option>`).join('')}</select></div>`;
   // The video's aspect ratio (all camera frames follow it), offered in scene settings and on camera moves.
+  // Marker colors for text and line drawings: quick swatches plus a custom color.
+  const INK_COLORS=['#213b4b','#111111','#285d63','#2f6fb3','#3f8f4a','#c0392b','#e67e22','#d4a017','#8e44ad','#7a4e2d','#ffffff'];
+  const colorField=it=>{const cur=String(it.color||(it.type==='text'?'#213b4b':'#285d63')).toLowerCase();return `<div class="field"><label>Color</label><div class="swatch-row">${INK_COLORS.map(c=>`<button class="swatch ${cur===c?'active':''}" data-color="${c}" style="background:${c}" title="${c}" aria-label="Color ${c}"></button>`).join('')}<input data-set="color" type="color" value="${esc(cur)}" title="Custom color" aria-label="Custom color"></div></div>`;};
+  const handField=(target,help)=>{const k=handSizeOf(target),deg=handAngleOf(target);return `<div class="field"><label>Hand size <span id="handSizeLabel">${Math.round(k*100)}%</span></label><input data-set="handSize" type="range" min="${HAND_SIZES[0]}" max="${HAND_SIZES[1]}" step="0.05" value="${k}"></div><div class="field"><label>Hand angle <span id="handAngleLabel">${Math.round(deg)}°</span></label><input data-set="handAngle" type="range" min="${HAND_ANGLES[0]}" max="${HAND_ANGLES[1]}" step="1" value="${deg}"><p class="panel-help">${help}</p></div>`;};
   const formatField=()=>`<div class="field"><label>Camera and video format</label><div class="segmented">${[['16:9','Wide'],['1:1','Square'],['9:16','Tall']].map(([v,n])=>`<button data-ratio="${v}" class="${state.project.ratio===v?'active':''}">${n}</button>`).join('')}</div></div>`;
   function renderInspector(){
     const it=item(),s=scene(),clip=clipById(state.selectedClip),several=selectedItems().filter(x=>x.type!=='camera');let html='';
@@ -1051,10 +1066,10 @@
     else if(it){
       html=`<div class="panel-eyebrow">SELECTED ${it.type.toUpperCase()}</div><h2 class="panel-title">${esc(tileLabel(it))}</h2><p class="panel-help">Fine tune how this part of your story appears.</p>`;
       if(it.type==='camera'){
-        html+=`<div class="panel-divider"></div>${field('Zoom','zoom',it.zoom,'number','min="0.2" max="5" step="0.05"')}<div class="field-row">${field('Center X','cx',Math.round(it.cx),'number','step="10"')}${field('Center Y','cy',Math.round(it.cy),'number','step="10"')}</div>${formatField()}<button class="panel-action camera-preview" data-action="preview-camera">Preview this camera frame</button><p class="panel-help camera-help">Drag the green frame to pan. Drag its handles to resize the shot. Preview is cropped to this frame.</p>`;
+        html+=`<div class="panel-divider"></div>${field('Zoom','zoom',it.zoom,'number','min="0.2" max="5" step="0.05"')}<div class="field-row">${field('Center X','cx',Math.round(it.cx),'number','step="10"')}${field('Center Y','cy',Math.round(it.cy),'number','step="10"')}</div>${formatField()}${handField(it,'How big the drawing hand is in this shot, and how it is tilted. Later camera moves start with these.')}<button class="panel-action camera-preview" data-action="preview-camera">Preview this camera frame</button><p class="panel-help camera-help">Drag the green frame to pan. Drag its handles to resize the shot. Preview is cropped to this frame.</p>`;
       }else{
-        if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}<div class="field"><label>Align</label><div class="segmented">${[['left','⇤ Left'],['center','↔ Center'],['right','Right ⇥']].map(([v,n])=>`<button data-align="${v}" class="${(it.align||'left')===v?'active':''}" title="Align text ${v}">${n}</button>`).join('')}</div></div>${fontPicker(it)}`;
-        if(it.type==='icon'||it.type==='text'||it.type==='vector')html+=field('Color','color',it.color||'#285d63','color');
+        if(it.type==='text')html+=`<div class="field"><label>Text</label><textarea data-set="text">${esc(it.text)}</textarea></div>${field('Font size','fontSize',it.fontSize,'number','min="16" max="180"')}${colorField(it)}<div class="field"><label>Align</label><div class="segmented">${[['left','⇤ Left'],['center','↔ Center'],['right','Right ⇥']].map(([v,n])=>`<button data-align="${v}" class="${(it.align||'left')===v?'active':''}" title="Align text ${v}">${n}</button>`).join('')}</div></div>${fontPicker(it)}`;
+        if(it.type==='icon'||it.type==='vector')html+=colorField(it);
         if(it.type==='shape')html+=`${selectField('Shape','shape',it.shape,[['round','Rounded rectangle'],['rect','Rectangle'],['circle','Ellipse']])}${field('Fill','fill',it.fill,'color')}`;
         html+=`<div class="field-row">${field('X position','x',Math.round(it.x),'number','step="1"')}${field('Y position','y',Math.round(it.y),'number','step="1"')}</div><div class="field-row">${field('Width','w',Math.round(it.w),'number','min="10"')}${field('Height','h',Math.round(it.h),'number','min="10"')}</div><div class="field-row">${field('Rotation (°)','rotation',Math.round(num(it.rotation)*10)/10,'number','min="-180" max="180" step="1"')}<div class="field"><label>&nbsp;</label><button class="panel-action" data-action="rotate-reset" ${num(it.rotation)?'':'disabled'}>Straighten</button></div></div>${arrangeFields([it])}`;
         html+=selectField('Entrance','animation',it.animation==='reveal'?'draw':it.animation,[['draw','Hand draw'],['fade','Fade in'],['slide','Slide in'],['pop','Pop in'],['none','Appear']]);
@@ -1070,7 +1085,7 @@
     }else if(state.tool==='audio'){
       html=audioPanel();
     }else{
-      html=`<div class="panel-eyebrow">SCENE SETTINGS</div><h2 class="panel-title">${esc(s.name)}</h2><p class="panel-help">Build your whiteboard story, one moment at a time.</p>${field('Scene name','sceneName',s.name)}${field('Background','background',s.background,'color')}${scriptFields(s)}<div class="panel-divider"></div>${formatField()}<div class="panel-divider"></div><div class="note-card">Pan across the whiteboard to build beyond the first frame. Add camera views to choose each shot.</div><div class="panel-divider"></div><button class="panel-action danger" data-action="scene-delete" ${state.project.scenes.length===1?'disabled':''}>Delete scene</button>`;
+      html=`<div class="panel-eyebrow">SCENE SETTINGS</div><h2 class="panel-title">${esc(s.name)}</h2><p class="panel-help">Build your whiteboard story, one moment at a time.</p>${field('Scene name','sceneName',s.name)}${field('Background','background',s.background,'color')}${scriptFields(s)}<div class="panel-divider"></div>${handField(null,'Used in scenes without camera moves. Each camera move can set its own size and angle.')}<div class="panel-divider"></div>${formatField()}<div class="panel-divider"></div><div class="note-card">Pan across the whiteboard to build beyond the first frame. Add camera views to choose each shot.</div><div class="panel-divider"></div><button class="panel-action danger" data-action="scene-delete" ${state.project.scenes.length===1?'disabled':''}>Delete scene</button>`;
     }
     $('#inspector').innerHTML=html;
     const picker=$('.font-picker'),chosen=picker?.querySelector('.active');if(chosen)picker.scrollTop=chosen.offsetTop-picker.offsetTop-picker.clientHeight/2+chosen.clientHeight/2;
@@ -1740,7 +1755,7 @@
   }
   function addShape(shape){addItem({...baseItem('shape'),shape,fill:'#cde9df',w:350,h:225});}
   function addText(){const it={...baseItem('text'),text:'Your message here',x:470,y:350,w:850,h:130,fontSize:72,color:'#213b4b',font:'patrick'};addItem(it);scheduleHandwriting(it);}
-  function addCamera(){addItem({id:id(),type:'camera',cx:state.editorView.cx,cy:state.editorView.cy,zoom:clamp(baseBox()[2]/(state.editorView.w*.72),.2,5),duration:1,pause:.2});}
+  function addCamera(){const last=scene().items.filter(x=>x.type==='camera').pop();addItem({id:id(),type:'camera',handSize:handSizeOf(last),handAngle:handAngleOf(last),cx:state.editorView.cx,cy:state.editorView.cy,zoom:clamp(baseBox()[2]/(state.editorView.w*.72),.2,5),duration:1,pause:.2});}
   function selectItem(itemId){state.selected=itemId;state.multi=[];state.selectedClip=null;state.tool='select';renderAll();}
   function pause(){state.playing=false;cancelAnimationFrame(state.frame);stopClips();audio.clockActive=false;renderTimelineClock();}
   // While previewing, the timeline shows the scene being played.
@@ -1896,7 +1911,7 @@
     exportRender=false;
     return {svg:`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}" viewBox="${box.join(' ')}">${markup}</svg>`,box,hand};
   }
-  function paintSvg(ctx,t){return new Promise((resolve,reject)=>{const frame=svgForTime(t,ctx.canvas.width,ctx.canvas.height),url=URL.createObjectURL(new Blob([frame.svg],{type:'image/svg+xml'})),img=new Image();img.onload=()=>{ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.drawImage(img,0,0,ctx.canvas.width,ctx.canvas.height);if(frame.hand&&state.handImage){const [x,y,w,h]=frame.box,sx=ctx.canvas.width/w,sy=ctx.canvas.height/h;ctx.drawImage(state.handImage,(frame.hand.x-HAND.x-x)*sx,(frame.hand.y-HAND.y-y)*sy,HAND.w*sx,HAND.h*sy);}URL.revokeObjectURL(url);resolve();};img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Frame could not be drawn'));};img.src=url;});}
+  function paintSvg(ctx,t){return new Promise((resolve,reject)=>{const frame=svgForTime(t,ctx.canvas.width,ctx.canvas.height),url=URL.createObjectURL(new Blob([frame.svg],{type:'image/svg+xml'})),img=new Image();img.onload=()=>{ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.drawImage(img,0,0,ctx.canvas.width,ctx.canvas.height);if(frame.hand&&state.handImage){const [x,y,w,h]=frame.box,sx=ctx.canvas.width/w,sy=ctx.canvas.height/h;const k=frame.hand.k||1;ctx.save();ctx.translate((frame.hand.x-x)*sx,(frame.hand.y-y)*sy);ctx.rotate((frame.hand.deg||0)*Math.PI/180);ctx.drawImage(state.handImage,-HAND.x*k*sx,-HAND.y*k*sy,HAND.w*k*sx,HAND.h*k*sy);ctx.restore();}URL.revokeObjectURL(url);resolve();};img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('Frame could not be drawn'));};img.src=url;});}
   // Export renders the video frame by frame (never in real time, so nothing is dropped) and encodes it with WebCodecs
   // into an MP4 written by mp4-muxer (vendor/mp4-muxer, MIT). The file has its index at the start and a keyframe every
   // two seconds, so it plays and scrubs in any player. The audio clips are mixed offline into the same file.
@@ -2203,6 +2218,7 @@
     }catch(e){toast('Could not read that image.');}
   }
   function applyField(key,value){
+    if(key==='handSize'||key==='handAngle'){const size=key==='handSize',v=size?clamp(num(value,1),...HAND_SIZES):clamp(num(value,0),...HAND_ANGLES),cam=item()?.type==='camera'?item():state.project;cam[key]=v;const label=$(size?'#handSizeLabel':'#handAngleLabel');if(label)label.textContent=size?`${Math.round(v*100)}%`:`${Math.round(v)}°`;changed(false);return;}
     const it=item(),target=['sceneName','background'].includes(key)?scene():it;if(!target)return;
     if(key==='sceneName')target.name=value.slice(0,80)||'Scene';
     else if(key==='rotation')target.rotation=((num(value,0)+180)%360+360)%360-180;

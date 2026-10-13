@@ -54,6 +54,14 @@ Each scene tile has a × (shown on hover and on the active scene) that deletes t
 
 Drawings, text and shapes can have a looping **effect after drawing** (`item.effect`: `pulse`, `spin`, `rock` or `glow`, with `effectSpeed` in seconds per cycle, `effectStrength` 0–1, `effectColor` for glow and `effectReverse` for counter-clockwise spin). It starts when the item finishes drawing and runs until its scene ends. `visualAt` reports each item's time since it finished (`since`) and `effectMarkup` wraps the item's markup in a transform, or adds a blurred colored copy behind it for glow, so effects show in Preview and in exports. The editor itself shows items still.
 
+## Hand size and angle
+
+The drawing hand has a size (`handSize`, 30–400% of normal) and a tilt about its pen tip (`handAngle`, −90° to 90°). Each camera move keeps its own, set with sliders on the camera move, and `visualAt` eases them between camera moves like the zoom. New camera moves start with the scene's last camera move's values; scenes without camera moves use the project's, set in scene settings. While a camera move is selected, a faint hand in its frame shows the result. `handImage` draws the hand in the editor preview; exports draw it at the same size and angle.
+
+## Text and line colors
+
+Text, icons and line drawings have a Color field (`colorField`) with eleven marker swatches (`INK_COLORS`) and a custom color picker. For text it sits right under Font size, above the font picker. Changing the color of smooth-font text re-traces its letters in the new color.
+
 ## Typing performance
 
 Smooth handwriting fonts are traced per letter. `letterReveal` caches each letter's image and time map (keyed by letter, font, color, scale and sub-pixel position), so editing text only traces new letters; `refreshHandwriting` yields to the browser every 12 ms and stops if the text changes again, and starts 250 ms after the last keystroke. This took typing from about a 1.1 s freeze per key to under 0.1 s. Images are awaited with `loadImage` (the `load` event) rather than `decode()`, which browsers hold back in hidden tabs; that had stalled start-up and adding drawings in a background tab.
