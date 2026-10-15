@@ -1089,7 +1089,7 @@
       <div class="field"><label>Arrange</label><div class="icon-row">${b('data-flip="x"','⇋ Flip','Flip left to right')}${b('data-flip="y"','⇵ Flip','Flip upside down')}${b('data-layer="front"','To front','Bring to front (Ctrl+Shift+])')}${b('data-layer="back"','To back','Send to back (Ctrl+Shift+[)')}</div></div>`;
   }
   function multiPanel(items){
-    return `<div class="panel-eyebrow">${items.length} ITEMS SELECTED</div><h2 class="panel-title">Selection</h2><p class="panel-help">Drag any of them to move them together. Shift-click to add or remove items.</p>${arrangeFields(items)}<div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-multi="copy">Copy</button><button class="panel-action" data-multi="duplicate">Duplicate</button><button class="panel-action danger" data-multi="delete">Delete</button></div>`;
+    return `<div class="panel-eyebrow">${items.length} ITEMS SELECTED</div><h2 class="panel-title">Selection</h2><p class="panel-help">Drag any of them to move them together. Shift-click to add or remove items.</p>${arrangeFields(items)}${items.every(x=>x.type==='image')?directionField(items):''}<div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-multi="copy">Copy</button><button class="panel-action" data-multi="duplicate">Duplicate</button><button class="panel-action danger" data-multi="delete">Delete</button></div>`;
   }
   function bindArrange(){
     $('#inspector').addEventListener('click',e=>{
@@ -1122,7 +1122,7 @@
         html+=`<div class="field-row">${field('X position','x',Math.round(it.x),'number','step="1"')}${field('Y position','y',Math.round(it.y),'number','step="1"')}</div><div class="field-row">${field('Width','w',Math.round(it.w),'number','min="10"')}${field('Height','h',Math.round(it.h),'number','min="10"')}</div><div class="field-row">${field('Rotation (°)','rotation',Math.round(num(it.rotation)*10)/10,'number','min="-180" max="180" step="1"')}<div class="field"><label>&nbsp;</label><button class="panel-action" data-action="rotate-reset" ${num(it.rotation)?'':'disabled'}>Straighten</button></div></div>${arrangeFields([it])}`;
         html+=selectField('Entrance','animation',it.animation==='reveal'?'draw':it.animation,[['draw','Hand draw'],['fade','Fade in'],['slide','Slide in'],['pop','Pop in'],['none','Appear']]);
         if(it.type==='image'&&it.character)html+=characterFaceField(it);
-        if(it.type==='image')html+=`<div class="note-card">${it.illustration?'The marker draws the line work first, then colors in each area. Transparent areas stay clear.':'The marker traces visible contours and fills only visible artwork. Transparent areas stay clear.'}</div>`;
+        if(it.type==='image'){const d=DRAW_DIRECTIONS.find(x=>x[0]===it.drawDirection);html+=`${directionField([it])}<div class="note-card">${d?`The marker draws ${d[2].toLowerCase()}, the outlines a little ahead of the coloring. Transparent areas stay clear.`:it.illustration?'The marker draws the line work first, then colors in each area. Transparent areas stay clear.':'The marker traces visible contours and fills only visible artwork. Transparent areas stay clear.'}</div>`;}
       }
       const first=s.items[0]===it;
       html+=`<div class="panel-divider"></div><div class="field"><label>Starts</label><div class="segmented"><button data-start-mode="after" class="${it.withPrevious&&!first?'':'active'}">After previous</button><button data-start-mode="with" class="${it.withPrevious&&!first?'active':''}" ${first?'disabled title="The first item has nothing before it"':''}>With previous</button></div></div><div class="field-row">${field('Duration (sec)','duration',it.duration,'number','min="0.1" max="60" step="0.1"')}${field('Pause (sec)','pause',it.pause,'number','min="0" max="60" step="0.1"')}</div><div class="field-row">${field('Delay (sec)','delay',num(it.delay),'number','min="0" max="60" step="0.1"')}<div class="field"></div></div>${it.type==='camera'?'':effectFields(it)}<div class="panel-divider"></div><div class="panel-actions"><button class="panel-action" data-action="duplicate">Duplicate</button><button class="panel-action" data-action="back">Move earlier</button><button class="panel-action" data-action="forward">Move later</button><button class="panel-action danger" data-action="delete">Delete</button></div>`;
@@ -1601,7 +1601,7 @@
   // Swaps a placed character's expression, keeping its place, size and timing.
   async function setCharacterFace(it,face){
     if(!it?.character||it.character.face===face)return;
-    try{const p={...it.character,face},{art,trace}=await characterArt(p),plan=await planIllustration(art.src);
+    try{const p={...it.character,face},{art,trace}=await characterArt(p),plan=await planIllustration(art.src,it.drawDirection);
       snapshot();Object.assign(it,{character:p,src:art.src,tracePaths:trace.paths,fillPaths:trace.fillPaths,transparentArtwork:trace.transparent,illustration:plan,label:`Character (${partName(face).toLowerCase()})`});changed();}
     catch(e){console.error(e);toast('Could not change the expression.');}
   }
@@ -2072,7 +2072,7 @@
         catch{it.tracePaths=it.tracePaths||[];it.fillPaths=[];it.transparentArtwork=false;}
       }
       // Artwork from before illustration drawing is planned once and saved with the project.
-      if(it.type==='image'&&it.src&&it.transparentArtwork&&it.illustration?.v!==ILLUSTRATION_VERSION){try{it.illustration=await planIllustration(it.src);}catch(e){console.error('Could not plan the illustration',e);}}
+      if(it.type==='image'&&it.src&&(it.transparentArtwork||it.directionPlan)&&(it.illustration?.v!==ILLUSTRATION_VERSION||(it.illustration.dir||'auto')!==(it.drawDirection||'auto'))){try{it.illustration=await planIllustration(it.src,it.drawDirection);}catch(e){console.error('Could not plan the illustration',e);}}
     }
     return p;
   }
@@ -2280,7 +2280,39 @@
       strokes.push(pts);}
     return strokes;
   }
-  async function planIllustration(src){
+  // Draw directions. Natural draws the line work stroke by stroke and then colors each area; the others cut the picture
+  // into bands across the chosen direction and draw it band by band, the line work one band ahead of the coloring, so
+  // it builds up steadily from one side to the other. Coloring strokes then run across the direction of travel.
+  const DRAW_DIRECTIONS=[['auto','Natural','Natural order: outlines first, then coloring'],['ltr','→','Left to right'],['rtl','←','Right to left'],['ttb','↓','Top to bottom'],['btt','↑','Bottom to top']];
+  const HATCH_ANGLE={ltr:-Math.PI/2,rtl:Math.PI/2,ttb:0,btt:Math.PI};
+  function sweepPlan(lines,fills,dir,opaque,W,H){
+    const along=dir==='ltr'?p=>p[0]:dir==='rtl'?p=>W-p[0]:dir==='ttb'?p=>p[1]:p=>H-p[1];
+    let lo=Infinity,hi=-Infinity;for(let i=0;i<W*H;i++)if(opaque[i]){const u=along([i%W,(i/W)|0]);if(u<lo)lo=u;if(u>hi)hi=u;}
+    if(lo>hi){lo=0;hi=Math.max(W,H);}
+    const B=12,size=Math.max(1,(hi-lo+1)/B),bandOf=p=>clamp(Math.floor((along(p)-lo)/size),0,B-1);
+    // Splits a stroke where it crosses from one band into the next.
+    const cut=(pts,extra,out)=>{let band=bandOf(pts[0]),cur=[pts[0]];
+      for(let j=1;j<pts.length;j++){const a=pts[j-1],b=pts[j],to=bandOf(b),ua=along(a),ub=along(b);
+        while(band!==to){const step=to>band?1:-1,edge=lo+(band+(step>0?1:0))*size,f=clamp((edge-ua)/((ub-ua)||1e-9),0,1),q=[a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f];
+          cur.push(q);if(cur.length>1)out[band].push({...extra,pts:cur});cur=[q];band+=step;}
+        cur.push(b);}
+      if(cur.length>1)out[band].push({...extra,pts:cur});};
+    const lineBands=[...Array(B)].map(()=>[]),fillBands=[...Array(B)].map(()=>[]);
+    for(const pts of lines)cut(pts,{radius:null,region:-2,speed:1},lineBands);
+    for(const f of fills)cut(f.pts,{radius:f.radius,region:f.region,speed:2.4},fillBands);
+    // Within a band the pen goes to the nearest piece; lines are drawn from their closer end, coloring keeps its
+    // direction of travel.
+    const plan=[];let pen=null;
+    const dist=p=>pen?Math.hypot(p[0]-pen[0],p[1]-pen[1]):along(p);
+    const take=list=>{while(list.length){let best=0,score=Infinity,flip=false;
+      list.forEach((x,j)=>{const a=dist(x.pts[0]),b=x.region===-2?dist(x.pts[x.pts.length-1]):Infinity;if(Math.min(a,b)<score){score=Math.min(a,b);best=j;flip=b<a;}});
+      const x=list.splice(best,1)[0];if(flip)x.pts.reverse();plan.push(x);pen=x.pts[x.pts.length-1];}};
+    for(let k=0;k<B;k++){take(lineBands[k]);if(k)take(fillBands[k-1]);}
+    take(fillBands[B-1]);
+    return plan;
+  }
+  async function planIllustration(src,dir='auto'){
+    if(!(dir in HATCH_ANGLE))dir='auto';
     const image=await loadImage(src);
     const M=2,k=ILLUSTRATION_SIZE/Math.max(image.naturalWidth,image.naturalHeight),w=Math.max(4,Math.round(image.naturalWidth*k)),h=Math.max(4,Math.round(image.naturalHeight*k)),W=w+M*2,H=h+M*2,N=W*H;
     const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,M,M,w,h);
@@ -2315,9 +2347,9 @@
     const fills=[];
     regions.map((list,id)=>({list,id})).filter(r=>r.list.length>=16).sort((a,b)=>b.list.length-a.list.length).forEach((r,n)=>{
       const gap=clamp(Math.sqrt(r.list.length)/5,3,8);
-      for(const p of hatchStrokes(r.list,W,(n%2?.7:.45)+(n%3)*.08,gap))fills.push({pts:p,region:r.id,radius:gap*.62});});
+      for(const p of hatchStrokes(r.list,W,dir==='auto'?(n%2?.7:.45)+(n%3)*.08:HATCH_ANGLE[dir]+(n%2?.14:-.14),gap))fills.push({pts:p,region:r.id,radius:gap*.62});});
     // Times: lines at drawing speed, coloring quicker, and short pen lifts between strokes.
-    const plan=[...lines.map(pts=>({pts,radius:null,region:-2,speed:1})),...fills.map(f=>({...f,speed:2.4}))];let clock=0,last=null;
+    const plan=dir==='auto'?[...lines.map(pts=>({pts,radius:null,region:-2,speed:1})),...fills.map(f=>({...f,speed:2.4}))]:sweepPlan(lines,fills,dir,opaque,W,H);let clock=0,last=null;
     for(const s of plan){if(last)clock+=Math.hypot(s.pts[0][0]-last[0],s.pts[0][1]-last[1])*.35+3;s.len=Math.max(.5,lengthOf(s.pts));s.t0=clock;clock+=s.len/s.speed;s.t1=clock;last=s.pts[s.pts.length-1];}
     const total=Math.max(1e-6,clock),time=new Float32Array(N).fill(-1),queue=new Int32Array(N);let tail=0;
     // Each pen position uncovers a circle the width of the marker: the line's own width on line work, or the coloring
@@ -2338,7 +2370,7 @@
     for(let y=0;y<h;y++)for(let x=0;x<w;x++){const t=time[(y+M)*W+x+M],o=(y*w+x)*4;out.data[o]=out.data[o+1]=out.data[o+2]=255;out.data[o+3]=t<0?0:Math.round(255-clamp(t,0,1)*250);}
     mc.putImageData(out,0,0);
     const norm=([x,y])=>[+((x-M)/w).toFixed(4),+((y-M)/h).toFixed(4)];
-    return {v:ILLUSTRATION_VERSION,map:map.toDataURL('image/png'),pen:plan.map(s=>({p:s.pts.map(norm),a:+(s.t0/total).toFixed(5),b:+(s.t1/total).toFixed(5)}))};
+    return {v:ILLUSTRATION_VERSION,dir,map:map.toDataURL('image/png'),pen:plan.map(s=>({p:s.pts.map(norm),a:+(s.t0/total).toFixed(5),b:+(s.t1/total).toFixed(5)}))};
   }
   // Where the hand is at a moment of an illustration: along the current stroke, or lifted between strokes.
   function illustrationPen(pen,progress){
@@ -2360,11 +2392,27 @@
     if(pen)markup+=handMarkup(it.x+pen.x*it.w,it.y+pen.y*it.h-pen.lift*Math.min(it.w,it.h)*.06);
     return markup;
   }
+  async function setDrawDirection(items,dir){
+    items=items.filter(it=>it.type==='image'&&it.src&&(it.drawDirection||'auto')!==dir);if(!items.length)return;
+    const keep=items.map(it=>!!(it.transparentArtwork||(it.illustration&&!it.directionPlan)));
+    try{
+      const plans=await Promise.all(items.map((it,k)=>dir==='auto'&&!keep[k]?null:planIllustration(it.src,dir)));
+      snapshot();
+      items.forEach((it,k)=>{if(dir==='auto')delete it.drawDirection;else it.drawDirection=dir;
+        if(plans[k])it.illustration=plans[k];else delete it.illustration;
+        if(plans[k]&&!keep[k])it.directionPlan=true;else delete it.directionPlan;});
+      changed();
+    }catch(e){console.error(e);toast('Could not change the drawing direction.');}
+  }
+  function directionField(items){
+    const dirs=new Set(items.map(it=>it.drawDirection||'auto')),one=dirs.size===1?[...dirs][0]:null;
+    return `<div class="field"><label>Draw direction</label><div class="segmented direction-picker">${DRAW_DIRECTIONS.map(([v,icon,name])=>`<button data-draw-dir="${v}" class="${one===v?'active':''}" title="${name}">${icon}</button>`).join('')}</div></div>`;
+  }
   // Adds the illustration plan to artwork with a transparent background (or any artwork when forced, as for backdrops);
   // other images keep the generic tracing.
   async function withIllustration(fields,force=false){
     if(!fields.transparentArtwork&&!force)return fields;
-    try{return {...fields,illustration:await planIllustration(fields.src),duration:Math.max(num(fields.duration,2.2),3.2)};}catch(e){console.error('Could not plan the illustration',e);return fields;}
+    try{return {...fields,illustration:await planIllustration(fields.src,fields.drawDirection),duration:Math.max(num(fields.duration,2.2),3.2)};}catch(e){console.error('Could not plan the illustration',e);return fields;}
   }
   async function traceImage(src){
     const image=await loadImage(src);
@@ -2516,7 +2564,7 @@
   }
   function bind(){
     document.querySelectorAll('.tool').forEach(b=>b.addEventListener('click',()=>{stopPreview();state.tool=b.dataset.tool;state.selected=null;if(state.tool==='text')addText();else if(state.tool==='upload')$('#uploadInput').click();else if(state.tool==='camera')addCamera();else{renderAll();}}));
-    $('#inspector').addEventListener('click',e=>{const icon=e.target.closest('[data-icon]'),sheet=e.target.closest('[data-sheet-item]'),shape=e.target.closest('[data-shape]'),ratio=e.target.closest('[data-ratio]'),align=e.target.closest('[data-align]'),act=e.target.closest('[data-action]');if(align){const it=item();if(it?.type==='text'&&(it.align||'left')!==align.dataset.align){snapshot();it.align=align.dataset.align;scheduleHandwriting(it);changed();}}const startMode=e.target.closest('[data-start-mode]');if(startMode){const it=item();if(it&&!!it.withPrevious!==(startMode.dataset.startMode==='with')){snapshot();it.withPrevious=startMode.dataset.startMode==='with';changed();}return;}const font=e.target.closest('[data-font]');if(font){const it=item();if(it?.type==='text'&&it.font!==font.dataset.font){snapshot();applyField('font',font.dataset.font);renderInspector();}return;}const tab=e.target.closest('[data-lib-tab]'),art=e.target.closest('[data-art]'),tabler=e.target.closest('[data-tabler]'),tone=e.target.closest('[data-lib-tone]'),color=e.target.closest('[data-peep-color]');
+    $('#inspector').addEventListener('click',e=>{const icon=e.target.closest('[data-icon]'),sheet=e.target.closest('[data-sheet-item]'),shape=e.target.closest('[data-shape]'),ratio=e.target.closest('[data-ratio]'),align=e.target.closest('[data-align]'),act=e.target.closest('[data-action]');if(align){const it=item();if(it?.type==='text'&&(it.align||'left')!==align.dataset.align){snapshot();it.align=align.dataset.align;scheduleHandwriting(it);changed();}}const drawDir=e.target.closest('[data-draw-dir]');if(drawDir){setDrawDirection(selectedItems(),drawDir.dataset.drawDir);return;}const startMode=e.target.closest('[data-start-mode]');if(startMode){const it=item();if(it&&!!it.withPrevious!==(startMode.dataset.startMode==='with')){snapshot();it.withPrevious=startMode.dataset.startMode==='with';changed();}return;}const font=e.target.closest('[data-font]');if(font){const it=item();if(it?.type==='text'&&it.font!==font.dataset.font){snapshot();applyField('font',font.dataset.font);renderInspector();}return;}const tab=e.target.closest('[data-lib-tab]'),art=e.target.closest('[data-art]'),tabler=e.target.closest('[data-tabler]'),tone=e.target.closest('[data-lib-tone]'),color=e.target.closest('[data-peep-color]');
       if(tab&&library.tab!==tab.dataset.libTab){library.tab=tab.dataset.libTab;library.category='all';library.limit=LIBRARY_PAGE;renderInspector();}
       if(e.target.closest('[data-lib-more]')){library.limit+=LIBRARY_PAGE;showLibraryResults();}
       if(tone){library.tone=tone.dataset.libTone;document.querySelectorAll('[data-lib-tone]').forEach(b=>b.classList.toggle('active',b===tone));showLibraryResults();}

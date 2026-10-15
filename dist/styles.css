@@ -41,3 +41,4 @@
 
 .lib-upload{width:100%;margin:0 0 12px}.lib-item{position:relative}.lib-item .mine-del{position:absolute;top:3px;right:3px;width:18px;height:18px;border-radius:50%;background:#fff;color:#a0abb0;font-size:13px;line-height:18px;text-align:center;box-shadow:0 1px 3px #0002;opacity:0;transition:opacity .12s}.lib-item:hover .mine-del{opacity:1}.lib-item .mine-del:hover{color:#cf6d63}
 .mine-shared a{color:#2b7160;font-weight:700}
+.direction-picker button{font-size:14px;padding:6px 3px}.direction-picker button:first-child{font-size:11px;flex:1.8}
